@@ -1,8 +1,36 @@
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8 });
+const args = process.argv.slice(2);
+const [command, ...commandArgs] = args;
+const isWriteMode = command === "write";
 
-console.log("Hold a MIFARE Classic tag near the reader...");
+if (command && !isWriteMode) {
+  console.error("Usage: node 300-read-write.js [write <content>]");
+  process.exit(1);
+}
+
+const writeContent = isWriteMode ? commandArgs.join(" ").trim() : "";
+
+if (isWriteMode && !writeContent) {
+  console.error("Usage: node 300-read-write.js write <content>");
+  process.exit(1);
+}
+
+function logResult(result) {
+  console.log("");
+  console.log(`Card UID: ${result.uid}`);
+  console.log(`Selected tag size/code: ${result.size}`);
+  console.log(
+    `Block ${result.block} raw:  ${result.data
+      .toString("hex")
+      .match(/.{1,2}/g)
+      .join(":")}`
+  );
+  console.log(`Block ${result.block} text: "${result.text}"`);
+}
+
+console.log(isWriteMode ? `Hold a MIFARE Classic tag near the reader to write \"${writeContent}\"...` : "Hold a MIFARE Classic tag near the reader...");
 
 process.on("SIGINT", () => {
   console.log("\nExiting...");
@@ -11,22 +39,13 @@ process.on("SIGINT", () => {
 });
 
 try {
-  const readResult = await reader.readAsync();
-
-  console.log("");
-  console.log(`Card UID: ${readResult.uid}`);
-  console.log(`Selected tag size/code: ${readResult.size}`);
-  console.log(
-    `Block ${readResult.block} raw:  ${readResult.data
-      .toString("hex")
-      .match(/.{1,2}/g)
-      .join(":")}`
-  );
-  console.log(`Block ${readResult.block} text: "${readResult.text}"`);
-
-  // Example write:
-  // const writeResult = await reader.writeAsync("Hello Pi 5!", { block: 8 });
-  // console.log(`After write: "${writeResult.text}"`);
+  if (isWriteMode) {
+    const writeResult = await reader.writeAsync(writeContent, { block: 8 });
+    logResult(writeResult);
+  } else {
+    const readResult = await reader.readAsync();
+    logResult(readResult);
+  }
 } catch (error) {
   console.error(error.message);
   process.exitCode = 1;
