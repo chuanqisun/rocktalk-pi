@@ -1,4 +1,4 @@
-import { concatMap, debounceTime, from, map, of, share, tap } from "rxjs";
+import { concatMap, debounceTime, distinctUntilChanged, from, map, of, share, tap } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
