@@ -1,7 +1,7 @@
-import { concatMap, from, of } from "rxjs";
+import { concatMap, debounceTime, from, map, merge, of, share } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
-const reader = new Rc522({ block: 8 });
+const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
 const args = process.argv.slice(2);
 const [command, ...commandArgs] = args;
 const isWriteMode = command === "write";
@@ -49,11 +49,13 @@ async function* infiniteRead() {
   }
 }
 
-const read$ = from(infiniteRead()).pipe(
-  concatMap((result) => {
-    console.log(JSON.stringify(result));
-    return of(result);
-  })
+const read$ = from(infiniteRead()).pipe(share());
+
+const detach$ = from(read$).pipe(
+  debounceTime(220),
+  map(() => ({ type: "detach" }))
 );
 
-read$.subscribe();
+const log$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
+
+merge(log$, detach$).subscribe();
