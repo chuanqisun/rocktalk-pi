@@ -1,19 +1,77 @@
+import { cancel, intro, isCancel, outro, select } from "@clack/prompts";
+import { execFile } from "node:child_process";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { promisify } from "node:util";
 import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
 import AudioPlayer from "./lib/audio-player.js";
 import Rc522 from "./lib/rc522.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const audioPlayer = new AudioPlayer({ baseDir: resolve(__dirname, "tracks") });
+const execFileAsync = promisify(execFile);
 const reader = new Rc522({ block: 8, pollIntervalMs: 80 });
 
-process.on("SIGINT", () => {
-  console.log("\nExiting...");
-  audioPlayer.stop();
-  reader.close();
-  process.exit(0);
-});
+function createStartEvent(uid, data) {
+  return /** @type {{ type: "start", uid: string, data: string }} */ ({ type: "start", uid, data });
+}
+
+function createStopEvent() {
+  return /** @type {{ type: "stop" }} */ ({ type: "stop" });
+}
+
+function parseAlsaDevices(output) {
+  const lines = output.split(/\r?\n/).map((line) => line.trimEnd());
+  const devices = [];
+
+  for (let index = 0; index < lines.length; index += 1) {
+    const name = lines[index]?.trim();
+
+    if (!name || lines[index].startsWith(" ") || lines[index].startsWith("\t")) {
+      continue;
+    }
+
+    const descriptionLines = [];
+    let lookahead = index + 1;
+
+    while (lookahead < lines.length && (/^\s/.test(lines[lookahead]) || lines[lookahead] === "")) {
+      const description = lines[lookahead].trim();
+
+      if (description) {
+        descriptionLines.push(description);
+      }
+
+      lookahead += 1;
+    }
+
+    devices.push({
+      value: name,
+      label: name,
+      hint: descriptionLines.join(" | "),
+    });
+  }
+
+  return devices;
+}
+
+async function promptForAudioDevice() {
+  const { stdout } = await execFileAsync("aplay", ["-L"]);
+  const devices = parseAlsaDevices(stdout);
+
+  if (devices.length === 0) {
+    throw new Error("No ALSA playback devices were reported by aplay -L.");
+  }
+
+  const selected = await select({
+    message: "Choose an audio device.",
+    options: devices,
+  });
+
+  if (isCancel(selected)) {
+    return null;
+  }
+
+  return selected;
+}
 
 async function* infiniteRead() {
   while (true) {
@@ -51,11 +109,7 @@ const startPlay$ = read$.pipe(
   filter(([_, state]) => state.state === "idle"),
   tap(([event, _]) => state$.next({ uid: event.uid, state: "playing" })),
   tap(([event, _]) => console.log(`[playing] ${event.uid}...`)),
-  map(([event]) => ({
-    type: "start",
-    uid: event.uid,
-    data: event.text,
-  }))
+  map(([event]) => createStartEvent(event.uid, event.text))
 );
 
 const hopSwap$ = idChange$.pipe(
@@ -63,7 +117,7 @@ const hopSwap$ = idChange$.pipe(
   filter(([idChange, state]) => state.state === "playing" && state.uid !== idChange.uid),
   tap(() => state$.next({ uid: "", state: "idle" })),
   tap(([_, state]) => console.log(`[stopped] ${state.uid}.`)),
-  map(() => ({ type: "stop" }))
+  map(() => createStopEvent())
 );
 
 const stopPlay$ = detach$.pipe(
@@ -71,13 +125,13 @@ const stopPlay$ = detach$.pipe(
   filter(([detach, state]) => state.state === "playing" && detach.uid === state.uid),
   tap(() => state$.next({ uid: "", state: "idle" })),
   tap(([_, state]) => console.log(`[stopped] ${state.uid}.`)),
-  map(() => ({ type: "stop" }))
+  map(() => createStopEvent())
 );
 
 /**
  * @param {{ type: "start", uid: string, data: string } | { type: "stop" }} event
  */
-async function handlePlaybackEvent(event) {
+async function handlePlaybackEvent(audioPlayer, event) {
   console.log(`[event] ${JSON.stringify(event)}`);
 
   if (event.type === "start") {
@@ -88,8 +142,38 @@ async function handlePlaybackEvent(event) {
   audioPlayer.stop();
 }
 
-merge(startPlay$, hopSwap$, stopPlay$)
-  .pipe(
-    concatMap((event) => from(handlePlaybackEvent(event.type === "start" ? event : { type: "stop" })))
-  )
-  .subscribe();
+async function main() {
+  intro("Rock Talk player");
+
+  const selectedDevice = await promptForAudioDevice();
+
+  if (!selectedDevice) {
+    reader.close();
+    outro("Rock Talk player cancelled");
+    return;
+  }
+
+  const audioPlayer = new AudioPlayer({
+    baseDir: resolve(__dirname, "tracks"),
+    device: selectedDevice,
+  });
+
+  process.on("SIGINT", () => {
+    console.log("\nExiting...");
+    audioPlayer.stop();
+    reader.close();
+    process.exit(0);
+  });
+
+  merge(startPlay$, hopSwap$, stopPlay$)
+    .pipe(concatMap((event) => from(handlePlaybackEvent(audioPlayer, event))))
+    .subscribe();
+
+  outro(`Using audio device ${selectedDevice}`);
+}
+
+main().catch((error) => {
+  cancel(error instanceof Error ? error.message : String(error));
+  reader.close();
+  process.exitCode = 1;
+});
