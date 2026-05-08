@@ -57,7 +57,7 @@ const hopSwap$ = idChange$.pipe(
   filter(([idChange, state]) => state.state === "playing" && state.uid !== idChange.uid),
   tap(() => state$.next({ uid: "", state: "idle" })),
   tap(([_, state]) => console.log(`[stopped] ${state.uid}.`)),
-  map(([_, state]) => ({ type: "stop" }))
+  map(() => ({ type: "stop" }))
 );
 
 const stopPlay$ = detach$.pipe(
@@ -65,7 +65,7 @@ const stopPlay$ = detach$.pipe(
   filter(([detach, state]) => state.state === "playing" && detach.uid === state.uid),
   tap(() => state$.next({ uid: "", state: "idle" })),
   tap(([_, state]) => console.log(`[stopped] ${state.uid}.`)),
-  map(([_, state]) => ({ type: "stop" }))
+  map(() => ({ type: "stop" }))
 );
 
 merge(startPlay$, hopSwap$, stopPlay$)
