@@ -1,7 +1,7 @@
 import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
-const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
+const reader = new Rc522({ block: 8, pollIntervalMs: 80 });
 
 process.on("SIGINT", () => {
   console.log("\nExiting...");
@@ -32,7 +32,7 @@ const idChange$ = from(rawInput$).pipe(
 );
 
 const detach$ = from(rawInput$).pipe(
-  debounceTime(220),
+  debounceTime(100),
   withLatestFrom(idChange$),
   map(([_, identity]) => ({ type: "detach", uid: identity.uid })),
   tap((event) => console.log(`[detached] ${event.uid}.`))
