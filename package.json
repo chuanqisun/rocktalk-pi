@@ -9,6 +9,9 @@
     "url": "git+https://github.com/chuanqisun/rock-talk-rpi.git"
   },
   "keywords": [],
+  "scripts": {
+    "start": "node play.js"
+  },
   "author": "",
   "license": "ISC",
   "bugs": {
