@@ -55,21 +55,21 @@ async function* infiniteRead() {
 
 const read$ = from(infiniteRead()).pipe(share());
 
-const lastUid$ = from(read$).pipe(
+const identity$ = from(read$).pipe(
   map((result) => result.uid),
   distinctUntilChanged(),
-  map((uid) => ({ type: "change", uid }))
+  map((uid) => ({ type: "identity", uid }))
 );
 
 const detach$ = from(read$).pipe(
   debounceTime(220),
-  withLatestFrom(lastUid$),
-  map(([_, uid]) => ({ type: "detach", uid }))
+  withLatestFrom(identity$),
+  map(([_, identity]) => ({ type: "detach", uid: identity.uid }))
 );
 
 const identify$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
 
-const interrupt$ = merge(lastUid$, detach$).pipe(
+const interrupt$ = merge(identity$, detach$).pipe(
   distinctUntilKeyChanged("uid"),
   map(({ uid }) => ({ type: "interrupt", uid }))
 );
