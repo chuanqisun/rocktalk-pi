@@ -1,21 +1,18 @@
-const { readdir } = require("node:fs/promises");
-const { resolve } = require("node:path");
-const readline = require("node:readline");
-const { BehaviorSubject, debounceTime, filter, from, map, merge, share, tap, withLatestFrom } = require("rxjs");
-const Rc522 = require("./lib/rc522.js");
+import { cancel, intro, isCancel, log, outro, select } from "@clack/prompts";
+import { readdir } from "node:fs/promises";
+import { dirname, resolve } from "node:path";
+import readline from "node:readline";
+import { fileURLToPath } from "node:url";
+import { BehaviorSubject, debounceTime, filter, from, map, merge, share, tap, withLatestFrom } from "rxjs";
+import Rc522 from "./lib/rc522.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
 const TRACKS_DIR = resolve(__dirname, "tracks");
 const TEXT_BLOCKS = [8, 9, 10];
 const SCAN_TIMEOUT_MS = 250;
 const reader = new Rc522({ blocks: TEXT_BLOCKS, pollIntervalMs: 80 });
 const CANCELLED = Symbol("cancelled");
 const BACK_TO_MENU = Symbol("back-to-menu");
-let clackPromptsPromise;
-
-async function loadClackPrompts() {
-  clackPromptsPromise ??= import("@clack/prompts");
-  return clackPromptsPromise;
-}
 
 function isTimeoutError(error) {
   return error instanceof Error && error.message === "Timed out waiting for RFID tag";
@@ -26,12 +23,10 @@ function formatData(value) {
 }
 
 function cancelStep() {
-  return loadClackPrompts().then(({ log }) => {
-    log.info("Step cancelled.");
-  });
+  log.info("Step cancelled.");
 }
 
-async function promptSelect(select, isCancel, message, options) {
+async function promptSelect(message, options) {
   const value = await select({ message, options });
 
   if (isCancel(value)) {
@@ -115,7 +110,6 @@ function createCancellationWatcher() {
 }
 
 async function waitForCardAction(message, action) {
-  const { log } = await loadClackPrompts();
   log.step(`${message} Press Esc, q, or Ctrl+C to cancel.`);
   const cancellation = createCancellationWatcher();
 
@@ -125,14 +119,14 @@ async function waitForCardAction(message, action) {
         const result = await Promise.race([action({ timeoutMs: SCAN_TIMEOUT_MS }), cancellation.promise]);
 
         if (result === CANCELLED) {
-          await cancelStep();
+          cancelStep();
           return CANCELLED;
         }
 
         return result;
       } catch (error) {
         if (error === CANCELLED) {
-          await cancelStep();
+          cancelStep();
           return CANCELLED;
         }
 
@@ -149,7 +143,6 @@ async function waitForCardAction(message, action) {
 }
 
 async function programCard(text) {
-  const { log } = await loadClackPrompts();
   try {
     const written = await waitForCardAction(`Tap and hold a rock to write ${formatData(text)}.`, async ({ timeoutMs }) => {
       const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs });
@@ -175,11 +168,9 @@ async function programCard(text) {
 }
 
 async function runAssignFlow() {
-  const { isCancel, select } = await loadClackPrompts();
-
   while (true) {
     const tracks = await listTracks();
-    const selected = await promptSelect(select, isCancel, "Choose a track to assign.", [
+    const selected = await promptSelect("Choose a track to assign.", [
       ...tracks.map((track) => ({ value: track, label: track })),
       { value: BACK_TO_MENU, label: "Back to main menu" },
     ]);
@@ -197,7 +188,6 @@ async function runUnassignFlow() {
 }
 
 async function runTestScanFlow() {
-  const { log } = await loadClackPrompts();
   log.step("Test scan is running. Tap cards to inspect UID and stored data.");
   log.info("Press Esc, q, or Ctrl+C to stop test scan.");
 
@@ -226,7 +216,7 @@ async function runTestScanFlow() {
       const result = await cancellation.promise;
 
       if (result === CANCELLED) {
-        await cancelStep();
+        cancelStep();
       }
     } finally {
       scanAbortController.abort();
@@ -239,11 +229,10 @@ async function runTestScanFlow() {
 }
 
 async function main() {
-  const { cancel, intro, isCancel, outro, select } = await loadClackPrompts();
   intro("Rock Talk: in Japanese Garden, there is a distinction between myōseki (named rocks) and mumyōseki (nameless rocks).");
 
   while (true) {
-    const action = await promptSelect(select, isCancel, "Choose an action.", [
+    const action = await promptSelect("Choose an action.", [
       { value: "assign", label: "Assign track rock" },
       { value: "unassign", label: "Clear track from rock" },
       { value: "test-scan", label: "Test scan" },
@@ -272,18 +261,8 @@ async function main() {
 
 main()
   .catch((error) => {
-    const message = error instanceof Error ? error.message : String(error);
-
-    return loadClackPrompts()
-      .then(({ cancel }) => {
-        cancel(message);
-      })
-      .catch(() => {
-        console.error(message);
-      })
-      .finally(() => {
-        process.exitCode = 1;
-      });
+    cancel(error instanceof Error ? error.message : String(error));
+    process.exitCode = 1;
   })
   .finally(() => {
     reader.close();

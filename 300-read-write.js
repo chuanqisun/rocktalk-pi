@@ -1,4 +1,4 @@
-const Rc522 = require("./lib/rc522.js");
+import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8 });
 const args = process.argv.slice(2);
@@ -38,21 +38,17 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
-async function main() {
-  try {
-    if (isWriteMode) {
-      const writeResult = await reader.writeAsync(writeContent, { block: 8 });
-      logResult(writeResult);
-    } else {
-      const readResult = await reader.readAsync();
-      logResult(readResult);
-    }
-  } catch (error) {
-    console.error(error.message);
-    process.exitCode = 1;
-  } finally {
-    reader.close();
+try {
+  if (isWriteMode) {
+    const writeResult = await reader.writeAsync(writeContent, { block: 8 });
+    logResult(writeResult);
+  } else {
+    const readResult = await reader.readAsync();
+    logResult(readResult);
   }
+} catch (error) {
+  console.error(error.message);
+  process.exitCode = 1;
+} finally {
+  reader.close();
 }
-
-void main();
