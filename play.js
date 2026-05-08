@@ -64,6 +64,22 @@ async function promptForAudioDevice() {
   return selected;
 }
 
+async function promptForLooping() {
+  const selected = await select({
+    message: "Loop playback?",
+    options: [
+      { value: true, label: "Yes", hint: "Restart a track automatically when it ends" },
+      { value: false, label: "No", hint: "Play each track once" },
+    ],
+  });
+
+  if (isCancel(selected)) {
+    return null;
+  }
+
+  return selected;
+}
+
 async function* infiniteRead() {
   while (true) {
     try {
@@ -148,9 +164,18 @@ async function main() {
     return;
   }
 
+  const looping = await promptForLooping();
+
+  if (looping === null) {
+    reader.close();
+    outro("Rock Talk player cancelled");
+    return;
+  }
+
   const audioPlayer = new AudioPlayer({
     baseDir: resolve(__dirname, "tracks"),
     device: selectedDevice,
+    loop: looping,
   });
 
   process.on("SIGINT", () => {
@@ -164,7 +189,7 @@ async function main() {
     .pipe(concatMap((event) => from(handlePlaybackEvent(audioPlayer, event))))
     .subscribe();
 
-  outro(`Using audio device ${selectedDevice}`);
+  outro(`Using audio device ${selectedDevice}${looping ? " with looping" : ""}`);
 }
 
 main().catch((error) => {
