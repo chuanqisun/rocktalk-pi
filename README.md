@@ -1,9 +1,26 @@
+0. Create respberry pi image
+
+Use Raspberry Pi Imager to flash the latest Raspberry Pi OS Lite (64-bit) to your microSD card.
+
+- Enable WIFI to use MLDEV (or any basic username/password WIFI)
+- Enable [Raspberry Pi Connect](https://www.raspberrypi.com/software/connect/) during the installation
+
 1. Enable SSH over USB
+
+- [Full documentation for reference](https://www.raspberrypi.com/news/usb-gadget-mode-in-raspberry-pi-os-ssh-over-usb/)
+- After initial boot, use Raspberry Pi Connect to open a terminal over the WIFI. Then run the following commands to enable SSH over USB
 
 ```sh
 sudo apt update
 sudo apt install rpi-usb-gadget
 sudo rpi-usb-gadget on
+sudo reboot
+```
+
+After this step, you can switch to use USB-C cable for local programming. In your host computer, connect to raspberry pi using the following command.
+
+```sh
+ssh <username>@<hostname>.local
 ```
 
 2. Enable SPI
@@ -17,7 +34,7 @@ sudo reboot
 2. Install packages
 
 ```sh
-sudo apt install i2c-tools mpg123
+sudo apt install mpg123
 ```
 
 3. Test audio pipeline
