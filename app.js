@@ -27,7 +27,8 @@ const idChange$ = from(rawInput$).pipe(
   map((result) => result.uid),
   distinctUntilChanged(),
   map((uid) => ({ type: "idChange", uid })),
-  tap((event) => console.log(`[id changed] ${event.uid}.`))
+  tap((event) => console.log(`[id changed] ${event.uid}.`)),
+  share()
 );
 
 const detach$ = from(rawInput$).pipe(
