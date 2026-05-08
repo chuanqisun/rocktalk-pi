@@ -1,5 +1,5 @@
 [Unit]
-Description=RockTalk App
+Description=RockTalk
 After=network.target
 
 [Service]
