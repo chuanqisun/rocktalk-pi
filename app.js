@@ -44,8 +44,7 @@ async function* infiniteRead() {
     try {
       yield reader.readAsync();
     } catch (error) {
-      console.error(error.message);
-      yield null; // Yield null on error to keep the loop running
+      // The chip might be approaching or leaving the reader's field. It's not a fatal error
     }
   }
 }
