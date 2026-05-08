@@ -175,13 +175,7 @@ async function runAssignFlow() {
 }
 
 async function runUnassignFlow() {
-  while (true) {
-    const result = await programCard("");
-
-    if (result === CANCELLED) {
-      return;
-    }
-  }
+  await programCard("");
 }
 
 async function runTestScanFlow() {
