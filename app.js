@@ -67,10 +67,7 @@ const detach$ = from(read$).pipe(
   map(([_, uid]) => ({ type: "detach", uid }))
 );
 
-const identify$ = from(read$).pipe(
-  distinctUntilKeyChanged("uid"),
-  concatMap((result) => of({ type: "read", ...result }))
-);
+const identify$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
 
 const interrupt$ = merge(lastUid$, detach$).pipe(
   distinctUntilKeyChanged("uid"),
