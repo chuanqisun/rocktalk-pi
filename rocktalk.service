@@ -6,7 +6,7 @@ After=network.target
 Type=simple
 User=rocktalk
 WorkingDirectory=/home/rocktalk/rocktalk-pi
-ExecStart=/home/rocktalk/.nvm/versions/node/v24.15.0/bin/node /home/rocktalk/rocktalk-pi/play.js -a hw:CARD=Stereo,DEV=0
+ExecStart=/home/rocktalk/rocktalk-pi/start.sh
 Restart=no
 Environment=NODE_ENV=production
 
