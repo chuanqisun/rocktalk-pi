@@ -1,4 +1,4 @@
-import { concatMap, from, of } from "rxjs";
+import { catchError, concatMap, from, of } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8 });
@@ -61,6 +61,10 @@ async function* infiniteRead() {
 }
 
 const read$ = from(infiniteRead()).pipe(
+  catchError((error) => {
+    console.error(error.message);
+    return of(null); // Continue the stream even if there's an error
+  }),
   concatMap((result) => {
     console.log(JSON.stringify(result));
     return of(result);
