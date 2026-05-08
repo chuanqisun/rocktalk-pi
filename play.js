@@ -156,9 +156,7 @@ async function handlePlaybackEvent(audioPlayer, event) {
   console.log(`[event] ${JSON.stringify(event)}`);
 
   if (event.type === "start") {
-    console.log("will start");
     await audioPlayer.play(event.data);
-    console.log("did start");
     return;
   }
 
