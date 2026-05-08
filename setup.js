@@ -12,6 +12,7 @@ const TEXT_BLOCKS = [8, 9, 10];
 const SCAN_TIMEOUT_MS = 250;
 const reader = new Rc522({ blocks: TEXT_BLOCKS, pollIntervalMs: 80 });
 const CANCELLED = Symbol("cancelled");
+const BACK_TO_MENU = Symbol("back-to-menu");
 
 function isTimeoutError(error) {
   return error instanceof Error && error.message === "Timed out waiting for RFID tag";
@@ -133,53 +134,43 @@ async function waitForCardAction(message, action) {
 }
 
 async function programCard(text) {
-  while (true) {
-    try {
-      const written = await waitForCardAction(`Tap and hold a card to write ${formatData(text)}.`, async ({ timeoutMs }) => {
-        const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs });
-        const readResult = await reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs });
+  try {
+    const written = await waitForCardAction(`Tap and hold a card to write ${formatData(text)}.`, async ({ timeoutMs }) => {
+      const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs });
+      const readResult = await reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs });
 
-        if (readResult.uid !== writeResult.uid || readResult.text !== text) {
-          throw new Error(
-            `Validation failed. Expected ${writeResult.uid} -> ${formatData(text)}, received ${readResult.uid} -> ${formatData(readResult.text)}.`
-          );
-        }
-
-        return writeResult;
-      });
-
-      if (written === CANCELLED) {
-        return CANCELLED;
+      if (readResult.uid !== writeResult.uid || readResult.text !== text) {
+        throw new Error(`Validation failed. Expected ${writeResult.uid} -> ${formatData(text)}, received ${readResult.uid} -> ${formatData(readResult.text)}.`);
       }
 
-      log.success(`Wrote ${formatData(written.text)} to card ${written.uid}.`);
-      return written;
-    } catch (error) {
-      log.error(error instanceof Error ? error.message : String(error));
+      return writeResult;
+    });
+
+    if (written === CANCELLED) {
+      return CANCELLED;
     }
+
+    log.success(`Wrote ${formatData(written.text)} to card ${written.uid}.`);
+    return written;
+  } catch (error) {
+    log.error(error instanceof Error ? error.message : String(error));
+    return null;
   }
 }
 
 async function runAssignFlow() {
   while (true) {
     const tracks = await listTracks();
-    const selected = await promptSelect(
-      "Choose a track to assign.",
-      tracks.map((track) => ({ value: track, label: track }))
-    );
+    const selected = await promptSelect("Choose a track to assign.", [
+      ...tracks.map((track) => ({ value: track, label: track })),
+      { value: BACK_TO_MENU, label: "Back to main menu" },
+    ]);
 
-    if (selected === CANCELLED) {
-      cancelStep();
+    if (selected === CANCELLED || selected === BACK_TO_MENU) {
       return;
     }
 
-    while (true) {
-      const result = await programCard(selected);
-
-      if (result === CANCELLED) {
-        break;
-      }
-    }
+    await programCard(selected);
   }
 }
 
@@ -233,8 +224,7 @@ async function runTestScanFlow() {
 }
 
 async function main() {
-  intro("Rock Talk Setup");
-  log.info(`In Japanese Garden, there is a distinction between myōseki (named rocks) and mumyōseki (nameless rocks).`);
+  intro("Rock Talk: in Japanese Garden, there is a distinction between myōseki (named rocks) and mumyōseki (nameless rocks).");
 
   while (true) {
     const action = await promptSelect("Choose an action.", [
