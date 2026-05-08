@@ -23,7 +23,7 @@ const state$ = new BehaviorSubject({ uid: "", state: "idle" });
 
 const rawInput$ = from(infiniteRead()).pipe(share());
 
-const idChange = from(rawInput$).pipe(
+const idChange$ = from(rawInput$).pipe(
   map((result) => result.uid),
   distinctUntilChanged(),
   map((uid) => ({ type: "idChange", uid })),
@@ -32,7 +32,7 @@ const idChange = from(rawInput$).pipe(
 
 const detach$ = from(rawInput$).pipe(
   debounceTime(220),
-  withLatestFrom(idChange),
+  withLatestFrom(idChange$),
   map(([_, identity]) => ({ type: "detach", uid: identity.uid })),
   tap((event) => console.log(`[detached] ${event.uid}.`))
 );
@@ -46,11 +46,18 @@ const startPlay$ = read$.pipe(
   tap(([event, _]) => console.log(`[playing] ${event.uid}...`))
 );
 
-const stopPlay$ = merge(idChange, detach$).pipe(
+const hopSwap$ = idChange$.pipe(
   withLatestFrom(state$),
-  filter(([_, state]) => state.state === "playing"),
-  tap(([event, _state]) => state$.next({ uid: event.uid, state: "idle" })),
-  tap(([event, _]) => console.log(`[stopped] ${event.uid}.`))
+  filter(([idChange, state]) => state.state === "playing" && state.uid !== idChange.uid),
+  tap(([idChange, _]) => state$.next({ uid: idChange.uid, state: "idle" })),
+  tap(([idChange, _]) => console.log(`[stopped] ${idChange.uid}.`))
 );
 
-merge(startPlay$, stopPlay$).subscribe();
+const stopPlay$ = detach$.pipe(
+  withLatestFrom(state$),
+  filter(([detach, state]) => state.state === "playing" && detach.uid === state.uid),
+  tap(([detach, _state]) => state$.next({ uid: detach.uid, state: "idle" })),
+  tap(([detach, _]) => console.log(`[stopped] ${detach.uid}.`))
+);
+
+merge(startPlay$, hopSwap$, stopPlay$).subscribe();
