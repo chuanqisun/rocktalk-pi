@@ -1,5 +1,5 @@
 {
   "main": "play.bundle.js",
-  "output": "sea",
-  "mainFormat": "module"
+  "output": "rocktalk",
+  "mainFormat": "commonjs"
 }
