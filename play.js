@@ -1,10 +1,16 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
+import AudioPlayer from "./lib/audio-player.js";
 import Rc522 from "./lib/rc522.js";
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const audioPlayer = new AudioPlayer({ baseDir: resolve(__dirname, "tracks") });
 const reader = new Rc522({ block: 8, pollIntervalMs: 80 });
 
 process.on("SIGINT", () => {
   console.log("\nExiting...");
+  audioPlayer.stop();
   reader.close();
   process.exit(0);
 });
@@ -68,10 +74,22 @@ const stopPlay$ = detach$.pipe(
   map(() => ({ type: "stop" }))
 );
 
+/**
+ * @param {{ type: "start", uid: string, data: string } | { type: "stop" }} event
+ */
+async function handlePlaybackEvent(event) {
+  console.log(`[event] ${JSON.stringify(event)}`);
+
+  if (event.type === "start") {
+    await audioPlayer.play(event.data);
+    return;
+  }
+
+  audioPlayer.stop();
+}
+
 merge(startPlay$, hopSwap$, stopPlay$)
   .pipe(
-    tap((event) => {
-      console.log(`[event] ${JSON.stringify(event)}`);
-    })
+    concatMap((event) => from(handlePlaybackEvent(event.type === "start" ? event : { type: "stop" })))
   )
   .subscribe();
