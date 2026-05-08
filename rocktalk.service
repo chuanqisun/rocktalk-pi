@@ -2,8 +2,8 @@
 Description=Rock Talk App
 
 [Service]
-ExecStart=/home/rocktalk/rock-talk-rpi/start.sh
-WorkingDirectory=/home/rocktalk/rock-talk-rpi
+ExecStart=/home/rocktalk/rocktalk-pi/start.sh
+WorkingDirectory=/home/rocktalk/rocktalk-pi
 Restart=always
 LimitNOFILE=4096
 IgnoreSIGPIPE=false
