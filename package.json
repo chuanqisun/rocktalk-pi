@@ -4,9 +4,6 @@
   "description": "",
   "main": "index.js",
   "type": "module",
-  "scripts": {
-    "build": "esbuild play.js --bundle --platform=node --outfile=play.bundle.js --format=esm"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/chuanqisun/rock-talk-rpi.git"
