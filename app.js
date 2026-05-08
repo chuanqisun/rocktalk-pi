@@ -62,7 +62,7 @@ async function* infiniteRead() {
 
 const read$ = from(infiniteRead()).pipe(
   concatMap((result) => {
-    console.log(JSON.stringify(result, null, 2));
+    console.log(JSON.stringify(result));
     return of(result);
   })
 );
