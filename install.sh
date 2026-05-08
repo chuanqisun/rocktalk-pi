@@ -9,6 +9,6 @@ npm init -y
 npm install spi-device rxjs @clack/prompts
 
 # register systemd service
-cp rocktalk.service /etc/systemd/system/
-systemctl enable rocktalk.service
-systemctl start rocktalk.service
+sudo cp rocktalk.service /etc/systemd/system/
+sudo systemctl enable rocktalk.service
+sudo systemctl start rocktalk.service
