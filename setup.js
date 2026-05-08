@@ -250,7 +250,7 @@ async function main() {
     await runTestScanFlow();
   }
 
-  outro("RFID setup closed.");
+  outro("Rock Talk setup complete");
 }
 
 main()
