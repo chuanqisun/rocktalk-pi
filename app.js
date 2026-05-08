@@ -1,4 +1,4 @@
-import { concatMap, debounceTime, from, map, merge, of, share } from "rxjs";
+import { concatMap, debounceTime, from, map, merge, of, share, tap } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
@@ -58,4 +58,4 @@ const detach$ = from(read$).pipe(
 
 const log$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
 
-merge(log$, detach$).subscribe();
+merge(log$, detach$).pipe(tap(console.log)).subscribe();
