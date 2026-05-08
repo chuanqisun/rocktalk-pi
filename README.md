@@ -73,6 +73,8 @@ npm install spi-device rxjs @clack/prompts
 
 6. Register systemd service
 
+This allows the app to auto-start on boot, without connecting to a computer
+
 ```sh
 sudo cp rocktalk.service /etc/systemd/system/
 
