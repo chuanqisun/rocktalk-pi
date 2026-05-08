@@ -1,2 +1,2 @@
 npm init -y
-npm install spi-device rxjs
+npm install spi-device rxjs @clack/prompts
