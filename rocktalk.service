@@ -1,14 +1,14 @@
 [Unit]
-Description=Rock Talk App
+Description=RockTalk App
+After=network.target
 
 [Service]
-ExecStart=/home/rocktalk/rocktalk-pi/start.sh
-WorkingDirectory=/home/rocktalk/rocktalk-pi
-Restart=always
-LimitNOFILE=4096
-IgnoreSIGPIPE=false
-KillMode=process
+Type=simple
 User=rocktalk
+WorkingDirectory=/home/rocktalk/rocktalk-pi
+ExecStart=/home/rocktalk/.nvm/versions/node/v24.15.0/bin/npm start
+Restart=no
+Environment=NODE_ENV=production
 
 [Install]
 WantedBy=multi-user.target
