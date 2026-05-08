@@ -46,17 +46,6 @@ function parseAlsaDevices(output) {
   return devices;
 }
 
-function parseRequestedAudioDevice(value) {
-  const match = value.match(/^([^:]+):([^:]+)$/);
-
-  if (!match) {
-    throw new Error(`Invalid audio device \"${value}\". Expected format <card_id:device_id>.`);
-  }
-
-  const [, cardId, deviceId] = match;
-  return { cardId, deviceId };
-}
-
 async function getAudioDevices() {
   const { stdout } = await execFileAsync("aplay", ["-l"]);
   const devices = parseAlsaDevices(stdout);
@@ -68,16 +57,24 @@ async function getAudioDevices() {
   return devices;
 }
 
-async function resolveAudioDeviceFromArg(value) {
-  const requestedDevice = parseRequestedAudioDevice(value);
-  const devices = await getAudioDevices();
-  const matchedDevice = devices.find((device) => device.cardId === requestedDevice.cardId && device.deviceId === requestedDevice.deviceId);
+function parseCliAudioDevice(argv) {
+  for (let index = 0; index < argv.length; index += 1) {
+    const arg = argv[index];
 
-  if (!matchedDevice) {
-    throw new Error(`Audio device \"${value}\" was not found in aplay -l output.`);
+    if (arg !== "-a") {
+      continue;
+    }
+
+    const value = argv[index + 1];
+
+    if (!value || value.startsWith("-")) {
+      throw new Error("Missing value for -a. Expected an ALSA device such as plughw:2,0.");
+    }
+
+    return value;
   }
 
-  return matchedDevice.value;
+  return null;
 }
 
 async function promptForAudioDevice() {
@@ -171,8 +168,8 @@ async function handlePlaybackEvent(audioPlayer, event) {
 async function main() {
   intro("Rock Talk player");
 
-  const requestedDevice = process.argv[2];
-  const selectedDevice = requestedDevice ? await resolveAudioDeviceFromArg(requestedDevice) : await promptForAudioDevice();
+  const requestedDevice = parseCliAudioDevice(process.argv.slice(2));
+  const selectedDevice = requestedDevice ?? (await promptForAudioDevice());
 
   if (!selectedDevice) {
     reader.close();
