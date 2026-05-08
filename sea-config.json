@@ -1,5 +1,0 @@
-{
-  "main": "play.bundle.js",
-  "output": "rocktalk",
-  "mainFormat": "commonjs"
-}
