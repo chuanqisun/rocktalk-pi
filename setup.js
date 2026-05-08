@@ -3,7 +3,6 @@ import { readdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
-import { distinctUntilChanged, from, map } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -57,6 +56,7 @@ function createCancellationWatcher() {
   }
 
   readline.emitKeypressEvents(process.stdin);
+  process.stdin.resume();
 
   const shouldRestoreRawMode = !process.stdin.isRaw;
 
@@ -112,6 +112,8 @@ async function waitForCardAction(message, action) {
         if (isTimeoutError(error)) {
           continue;
         }
+
+        throw error;
       }
     }
   } finally {
@@ -121,28 +123,29 @@ async function waitForCardAction(message, action) {
 
 async function programCard(text) {
   while (true) {
-    const written = await waitForCardAction(`Tap a card to write ${formatData(text)}.`, ({ timeoutMs }) =>
-      reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs })
-    );
+    try {
+      const written = await waitForCardAction(`Tap and hold a card to write ${formatData(text)}.`, async ({ timeoutMs }) => {
+        const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs });
+        const readResult = await reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs });
 
-    if (written === CANCELLED) {
+        if (readResult.uid !== writeResult.uid || readResult.text !== text) {
+          throw new Error(
+            `Validation failed. Expected ${writeResult.uid} -> ${formatData(text)}, received ${readResult.uid} -> ${formatData(readResult.text)}.`
+          );
+        }
+
+        return writeResult;
+      });
+
+      if (written === CANCELLED) {
+        return;
+      }
+
+      log.success(`Wrote ${formatData(written.text)} to card ${written.uid}.`);
       return;
+    } catch (error) {
+      log.error(error instanceof Error ? error.message : String(error));
     }
-
-    log.success(`Wrote ${formatData(written.text)} to card ${written.uid}.`);
-
-    const confirmed = await waitForCardAction("Tap the card again to confirm.", ({ timeoutMs }) => reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs }));
-
-    if (confirmed === CANCELLED) {
-      return;
-    }
-
-    if (confirmed.uid === written.uid && confirmed.text === text) {
-      log.success(`Confirmed card ${confirmed.uid} with value ${formatData(confirmed.text)}.`);
-      return;
-    }
-
-    log.error(`Validation failed. Expected ${written.uid} -> ${formatData(text)}, received ${confirmed.uid} -> ${formatData(confirmed.text)}.`);
   }
 }
 
@@ -165,53 +168,36 @@ async function runUnassignFlow() {
   await programCard("");
 }
 
-async function* createScanStream(signal) {
-  while (!signal.cancelled) {
-    try {
-      yield await reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs: SCAN_TIMEOUT_MS });
-    } catch (error) {
-      if (signal.cancelled || isTimeoutError(error)) {
-        continue;
-      }
-    }
-  }
-}
-
 async function runTestScanFlow() {
   log.step("Test scan is running. Tap cards to inspect UID and stored data.");
   log.info("Press Esc, q, or Ctrl+C to stop test scan.");
 
   const cancellation = createCancellationWatcher();
-  const signal = { cancelled: false };
+  let previousScan;
 
-  cancellation.promise.then(() => {
-    signal.cancelled = true;
-  });
+  try {
+    while (true) {
+      try {
+        const result = await Promise.race([reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs: SCAN_TIMEOUT_MS }), cancellation.promise]);
 
-  let streamError;
+        if (result === CANCELLED) {
+          break;
+        }
 
-  const scan$ = from(createScanStream(signal)).pipe(
-    map((result) => ({ uid: result.uid, text: result.text })),
-    distinctUntilChanged((left, right) => left.uid === right.uid && left.text === right.text)
-  );
+        if (!previousScan || previousScan.uid !== result.uid || previousScan.text !== result.text) {
+          log.info(`UID: ${result.uid} | Data: ${formatData(result.text)}`);
+          previousScan = { uid: result.uid, text: result.text };
+        }
+      } catch (error) {
+        if (error === CANCELLED || isTimeoutError(error)) {
+          continue;
+        }
 
-  const subscription = scan$.subscribe({
-    next: ({ uid, text }) => {
-      log.info(`UID: ${uid} | Data: ${formatData(text)}`);
-    },
-    error: (error) => {
-      streamError = error;
-      signal.cancelled = true;
-      cancellation.cancel();
-    },
-  });
-
-  await cancellation.promise;
-  subscription.unsubscribe();
-  cancellation.cleanup();
-
-  if (streamError) {
-    throw streamError;
+        throw error;
+      }
+    }
+  } finally {
+    cancellation.cleanup();
   }
 
   cancelStep();
