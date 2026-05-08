@@ -1,4 +1,4 @@
-import { concatMap, debounceTime, distinctUntilKeyChanged, from, map, merge, of, share, tap } from "rxjs";
+import { concatMap, from, of, takeUntil, tap } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
@@ -39,6 +39,10 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
+async function* infinite() {
+  while (true) yield true;
+}
+
 async function* infiniteRead() {
   while (true) {
     try {
@@ -50,15 +54,28 @@ async function* infiniteRead() {
 }
 
 const read$ = from(infiniteRead()).pipe(share());
-
 const detach$ = from(read$).pipe(
   debounceTime(220),
   map(() => ({ type: "detach" }))
 );
 
-const identify$ = from(read$).pipe(
-  distinctUntilKeyChanged("uid"),
-  concatMap((result) => of({ type: "read", ...result }))
-);
+// const identify$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
 
-merge(identify$, detach$).pipe(tap(console.log)).subscribe();
+// const uidChange$ = from(read$).pipe(
+//   map((result) => result.uid),
+//   distinctUntilChanged()
+// );
+
+// merge(identify$, detach$).pipe(tap(console.log)).subscribe();
+
+from(infinite())
+  .pipe(
+    concatMap(() =>
+      from(read$).pipe(
+        concatMap((result) => of({ type: "read", ...result })),
+        takeUntil(detach$)
+      )
+    )
+  )
+  .pipe(tap(console.log))
+  .subscribe();
