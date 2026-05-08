@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "build": "esbuild play.js --bundle --platform=node --outfile=play.bundle.js --format=cjs"
+    "build": "esbuild play.js --bundle --platform=node --outfile=play.bundle.js --format=esm"
   },
   "repository": {
     "type": "git",
