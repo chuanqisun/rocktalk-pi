@@ -140,7 +140,7 @@ async function waitForCardAction(message, action) {
 
 async function programCard(text) {
   try {
-    const written = await waitForCardAction(`Tap and hold a card to write ${formatData(text)}.`, async ({ timeoutMs }) => {
+    const written = await waitForCardAction(`Tap and hold a rock to write ${formatData(text)}.`, async ({ timeoutMs }) => {
       const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs });
       const readResult = await reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs });
 
@@ -155,7 +155,7 @@ async function programCard(text) {
       return CANCELLED;
     }
 
-    log.success(`Wrote ${formatData(written.text)} to card ${written.uid}.`);
+    log.success(`Wrote ${formatData(written.text)} to rock ${written.uid}.`);
     return written;
   } catch (error) {
     log.error(error instanceof Error ? error.message : String(error));
@@ -227,8 +227,8 @@ async function main() {
 
   while (true) {
     const action = await promptSelect("Choose an action.", [
-      { value: "assign", label: "Add track to a rock" },
-      { value: "unassign", label: "Clear the track from a rock" },
+      { value: "assign", label: "Assign track rock" },
+      { value: "unassign", label: "Clear track from rock" },
       { value: "test-scan", label: "Test scan" },
       { value: "quit", label: "Quit" },
     ]);
