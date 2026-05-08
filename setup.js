@@ -3,6 +3,7 @@ import { readdir } from "node:fs/promises";
 import { dirname, resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
+import { BehaviorSubject, debounceTime, filter, from, map, merge, share, tap, withLatestFrom } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -41,6 +42,16 @@ async function listTracks() {
     .filter((entry) => entry.isFile())
     .map((entry) => entry.name)
     .sort((left, right) => left.localeCompare(right));
+}
+
+async function* infiniteReadText() {
+  while (true) {
+    try {
+      yield reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs: SCAN_TIMEOUT_MS });
+    } catch (error) {
+      // Scan errors are expected while cards move through the reader field.
+    }
+  }
 }
 
 function createCancellationWatcher() {
@@ -173,34 +184,38 @@ async function runTestScanFlow() {
   log.info("Press Esc, q, or Ctrl+C to stop test scan.");
 
   const cancellation = createCancellationWatcher();
-  let previousScan;
+  const state$ = new BehaviorSubject({ active: false });
+  const rawInput$ = from(infiniteReadText()).pipe(share());
+  const detach$ = rawInput$.pipe(
+    debounceTime(100),
+    tap(() => state$.next({ active: false }))
+  );
+  const scan$ = rawInput$.pipe(
+    withLatestFrom(state$),
+    filter(([_, state]) => !state.active),
+    tap(() => state$.next({ active: true })),
+    map(([result]) => result)
+  );
 
   try {
-    while (true) {
-      try {
-        const result = await Promise.race([reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs: SCAN_TIMEOUT_MS }), cancellation.promise]);
+    const subscription = merge(
+      scan$.pipe(tap((result) => log.info(`UID: ${result.uid} | Data: ${formatData(result.text)}`))),
+      detach$.pipe(map(() => undefined))
+    ).subscribe();
 
-        if (result === CANCELLED) {
-          break;
-        }
+    try {
+      const result = await cancellation.promise;
 
-        if (!previousScan || previousScan.uid !== result.uid || previousScan.text !== result.text) {
-          log.info(`UID: ${result.uid} | Data: ${formatData(result.text)}`);
-          previousScan = { uid: result.uid, text: result.text };
-        }
-      } catch (error) {
-        if (error === CANCELLED || isTimeoutError(error)) {
-          continue;
-        }
-
-        throw error;
+      if (result === CANCELLED) {
+        cancelStep();
       }
+    } finally {
+      subscription.unsubscribe();
+      state$.complete();
     }
   } finally {
     cancellation.cleanup();
   }
-
-  cancelStep();
 }
 
 async function main() {
