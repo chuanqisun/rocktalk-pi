@@ -166,14 +166,22 @@ async function handlePlaybackEvent(audioPlayer, event) {
 }
 
 async function main() {
-  intro("Rock Talk player");
-
   const requestedDevice = parseCliAudioDevice(process.argv.slice(2));
+  const useInteractivePrompt = requestedDevice === null;
+
+  if (useInteractivePrompt) {
+    intro("Rock Talk player");
+  }
+
   const selectedDevice = requestedDevice ?? (await promptForAudioDevice());
 
   if (!selectedDevice) {
     reader.close();
-    outro("Rock Talk player cancelled");
+
+    if (useInteractivePrompt) {
+      outro("Rock Talk player cancelled");
+    }
+
     return;
   }
 
@@ -194,11 +202,24 @@ async function main() {
     .pipe(concatMap((event) => from(handlePlaybackEvent(audioPlayer, event))))
     .subscribe();
 
-  outro(`Using audio device ${selectedDevice} with looping`);
+  if (useInteractivePrompt) {
+    outro(`Using audio device ${selectedDevice} with looping`);
+    return;
+  }
+
+  console.log(`Using audio device ${selectedDevice} with looping`);
 }
 
 main().catch((error) => {
-  cancel(error instanceof Error ? error.message : String(error));
+  const message = error instanceof Error ? error.message : String(error);
+  const useInteractivePrompt = parseCliAudioDevice(process.argv.slice(2)) === null;
+
+  if (useInteractivePrompt) {
+    cancel(message);
+  } else {
+    console.error(message);
+  }
+
   reader.close();
   process.exitCode = 1;
 });
