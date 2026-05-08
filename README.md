@@ -68,7 +68,7 @@ cd rocktalk-pi
 
 #  setup node dependencies
 npm init -y
-npm install spi-device rxjs @clack/prompts
+npm install spi-device rxjs @clack/prompts --no-save
 ```
 
 6. Register systemd service
