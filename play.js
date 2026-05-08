@@ -20,33 +20,22 @@ function createStopEvent() {
 }
 
 function parseAlsaDevices(output) {
-  const lines = output.split(/\r?\n/).map((line) => line.trimEnd());
   const devices = [];
+  const lines = output.split(/\r?\n/);
 
-  for (let index = 0; index < lines.length; index += 1) {
-    const name = lines[index]?.trim();
+  for (const line of lines) {
+    const match = line.match(/^card\s+(\d+):\s+([^\[]+)\[([^\]]+)\],\s+device\s+(\d+):\s+([^\[]+)\[([^\]]+)\]$/);
 
-    if (!name || lines[index].startsWith(" ") || lines[index].startsWith("\t")) {
+    if (!match) {
       continue;
     }
 
-    const descriptionLines = [];
-    let lookahead = index + 1;
-
-    while (lookahead < lines.length && (/^\s/.test(lines[lookahead]) || lines[lookahead] === "")) {
-      const description = lines[lookahead].trim();
-
-      if (description) {
-        descriptionLines.push(description);
-      }
-
-      lookahead += 1;
-    }
+    const [, cardNumber, cardId, cardName, deviceNumber, deviceId, deviceName] = match;
 
     devices.push({
-      value: name,
-      label: name,
-      hint: descriptionLines.join(" | "),
+      value: `plughw:${cardNumber},${deviceNumber}`,
+      label: `${cardName.trim()} / ${deviceName.trim()}`,
+      hint: `card ${cardNumber} (${cardId.trim()}), device ${deviceNumber} (${deviceId.trim()})`,
     });
   }
 
@@ -54,11 +43,11 @@ function parseAlsaDevices(output) {
 }
 
 async function promptForAudioDevice() {
-  const { stdout } = await execFileAsync("aplay", ["-L"]);
+  const { stdout } = await execFileAsync("aplay", ["-l"]);
   const devices = parseAlsaDevices(stdout);
 
   if (devices.length === 0) {
-    throw new Error("No ALSA playback devices were reported by aplay -L.");
+    throw new Error("No ALSA playback devices were reported by aplay -l.");
   }
 
   const selected = await select({
