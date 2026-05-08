@@ -234,7 +234,7 @@ async function runTestScanFlow() {
 
 async function main() {
   intro("Rock Talk Setup");
-  log.info(`I give you a name, you give me a world.`);
+  log.info(`In Japanese Garden, there is a distinction between myōseki (named rocks) and mumyōseki (nameless rocks).`);
 
   while (true) {
     const action = await promptSelect("Choose an action.", [
