@@ -233,8 +233,8 @@ async function runTestScanFlow() {
 }
 
 async function main() {
-  intro("rock-talk-rpi");
-  log.info(`Using RFID data blocks ${TEXT_BLOCKS.join(", ")} for filename storage.`);
+  intro("Rock Talk Setup");
+  log.info(`I give you a name, you give me a world.`);
 
   while (true) {
     const action = await promptSelect("Choose an action.", [
