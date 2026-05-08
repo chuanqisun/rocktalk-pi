@@ -1,0 +1,13 @@
+[Unit]
+Description=Rock Talk App
+After=network.target
+
+[Service]
+ExecStart=/usr/bin/node /home/pi/myapp/app.js
+WorkingDirectory=/home/rocktalk/rock-talk-rpi
+Restart=always
+User=rocktalk
+Environment=NODE_ENV=production
+
+[Install]
+WantedBy=multi-user.target
