@@ -45,11 +45,15 @@ async function listTracks() {
     .sort((left, right) => left.localeCompare(right));
 }
 
-async function* infiniteReadText() {
-  while (true) {
+async function* infiniteReadText(signal) {
+  while (!signal.aborted) {
     try {
       yield reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs: SCAN_TIMEOUT_MS });
     } catch (error) {
+      if (signal.aborted) {
+        return;
+      }
+
       // Scan errors are expected while cards move through the reader field.
     }
   }
@@ -188,8 +192,9 @@ async function runTestScanFlow() {
   log.info("Press Esc, q, or Ctrl+C to stop test scan.");
 
   const cancellation = createCancellationWatcher();
+  const scanAbortController = new AbortController();
   const state$ = new BehaviorSubject({ active: false });
-  const rawInput$ = from(infiniteReadText()).pipe(share());
+  const rawInput$ = from(infiniteReadText(scanAbortController.signal)).pipe(share());
   const detach$ = rawInput$.pipe(
     debounceTime(100),
     tap(() => state$.next({ active: false }))
@@ -214,6 +219,7 @@ async function runTestScanFlow() {
         cancelStep();
       }
     } finally {
+      scanAbortController.abort();
       subscription.unsubscribe();
       state$.complete();
     }
