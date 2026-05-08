@@ -10,7 +10,7 @@
   },
   "keywords": [],
   "scripts": {
-    "start": "node play.js"
+    "start": "node play.js -a hw:CARD=Stereo,DEV=0"
   },
   "author": "",
   "license": "ISC",
