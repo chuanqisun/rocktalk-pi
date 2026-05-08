@@ -1,4 +1,4 @@
-import { concatMap, debounceTime, from, map, of, share, takeUntil, tap } from "rxjs";
+import { concatMap, debounceTime, from, map, of, share, tap } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
@@ -59,23 +59,11 @@ const detach$ = from(read$).pipe(
   map(() => ({ type: "detach" }))
 );
 
-// const identify$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
+const identify$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
 
-// const uidChange$ = from(read$).pipe(
-//   map((result) => result.uid),
-//   distinctUntilChanged()
-// );
+const uidChange$ = from(read$).pipe(
+  map((result) => result.uid),
+  distinctUntilChanged()
+);
 
-// merge(identify$, detach$).pipe(tap(console.log)).subscribe();
-
-from(infinite())
-  .pipe(
-    concatMap(() =>
-      from(read$).pipe(
-        tap((result) => console.log("Read result:", result)),
-        concatMap((result) => of({ type: "read", ...result })),
-        takeUntil(detach$)
-      )
-    )
-  )
-  .subscribe();
+merge(identify$, detach$).pipe(tap(console.log)).subscribe();
