@@ -238,8 +238,8 @@ async function main() {
 
   while (true) {
     const action = await promptSelect("Choose an action.", [
-      { value: "assign", label: "Assign" },
-      { value: "unassign", label: "Unassign" },
+      { value: "assign", label: "Add track to a rock" },
+      { value: "unassign", label: "Clear the track from a rock" },
       { value: "test-scan", label: "Test scan" },
       { value: "quit", label: "Quit" },
     ]);
