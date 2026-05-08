@@ -35,6 +35,8 @@ function parseAlsaDevices(output) {
     const [, cardNumber, cardId, cardName, deviceNumber, deviceId, deviceName] = match;
 
     devices.push({
+      cardId: cardId.trim(),
+      deviceId: deviceId.trim(),
       value: `plughw:${cardNumber},${deviceNumber}`,
       label: `${cardName.trim()} / ${deviceName.trim()}`,
       hint: `card ${cardNumber} (${cardId.trim()}), device ${deviceNumber} (${deviceId.trim()})`,
@@ -44,13 +46,42 @@ function parseAlsaDevices(output) {
   return devices;
 }
 
-async function promptForAudioDevice() {
+function parseRequestedAudioDevice(value) {
+  const match = value.match(/^([^:]+):([^:]+)$/);
+
+  if (!match) {
+    throw new Error(`Invalid audio device \"${value}\". Expected format <card_id:device_id>.`);
+  }
+
+  const [, cardId, deviceId] = match;
+  return { cardId, deviceId };
+}
+
+async function getAudioDevices() {
   const { stdout } = await execFileAsync("aplay", ["-l"]);
   const devices = parseAlsaDevices(stdout);
 
   if (devices.length === 0) {
     throw new Error("No ALSA playback devices were reported by aplay -l.");
   }
+
+  return devices;
+}
+
+async function resolveAudioDeviceFromArg(value) {
+  const requestedDevice = parseRequestedAudioDevice(value);
+  const devices = await getAudioDevices();
+  const matchedDevice = devices.find((device) => device.cardId === requestedDevice.cardId && device.deviceId === requestedDevice.deviceId);
+
+  if (!matchedDevice) {
+    throw new Error(`Audio device \"${value}\" was not found in aplay -l output.`);
+  }
+
+  return matchedDevice.value;
+}
+
+async function promptForAudioDevice() {
+  const devices = await getAudioDevices();
 
   const selected = await select({
     message: "Choose an audio device.",
@@ -140,7 +171,8 @@ async function handlePlaybackEvent(audioPlayer, event) {
 async function main() {
   intro("Rock Talk player");
 
-  const selectedDevice = await promptForAudioDevice();
+  const requestedDevice = process.argv[2];
+  const selectedDevice = requestedDevice ? await resolveAudioDeviceFromArg(requestedDevice) : await promptForAudioDevice();
 
   if (!selectedDevice) {
     reader.close();
