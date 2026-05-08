@@ -1,4 +1,5 @@
 {
   "main": "play.js",
-  "output": "play"
+  "output": "play",
+  "mainFormat": "module"
 }
