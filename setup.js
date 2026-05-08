@@ -149,11 +149,11 @@ async function programCard(text) {
       });
 
       if (written === CANCELLED) {
-        return;
+        return CANCELLED;
       }
 
       log.success(`Wrote ${formatData(written.text)} to card ${written.uid}.`);
-      return;
+      return written;
     } catch (error) {
       log.error(error instanceof Error ? error.message : String(error));
     }
@@ -161,22 +161,36 @@ async function programCard(text) {
 }
 
 async function runAssignFlow() {
-  const tracks = await listTracks();
-  const selected = await promptSelect(
-    "Choose a track to assign.",
-    tracks.map((track) => ({ value: track, label: track }))
-  );
+  while (true) {
+    const tracks = await listTracks();
+    const selected = await promptSelect(
+      "Choose a track to assign.",
+      tracks.map((track) => ({ value: track, label: track }))
+    );
 
-  if (selected === CANCELLED) {
-    cancelStep();
-    return;
+    if (selected === CANCELLED) {
+      cancelStep();
+      return;
+    }
+
+    while (true) {
+      const result = await programCard(selected);
+
+      if (result === CANCELLED) {
+        break;
+      }
+    }
   }
-
-  await programCard(selected);
 }
 
 async function runUnassignFlow() {
-  await programCard("");
+  while (true) {
+    const result = await programCard("");
+
+    if (result === CANCELLED) {
+      return;
+    }
+  }
 }
 
 async function runTestScanFlow() {
