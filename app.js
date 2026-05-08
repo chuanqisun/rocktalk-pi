@@ -72,10 +72,10 @@ from(infinite())
   .pipe(
     concatMap(() =>
       from(read$).pipe(
+        tap((result) => console.log("Read result:", result)),
         concatMap((result) => of({ type: "read", ...result })),
         takeUntil(detach$)
       )
     )
   )
-  .pipe(tap(console.log))
   .subscribe();
