@@ -5,7 +5,7 @@
   "main": "index.js",
   "type": "module",
   "scripts": {
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "build": "esbuild play.js --bundle --platform=node --outfile=play.bundle.js"
   },
   "repository": {
     "type": "git",
