@@ -1,4 +1,4 @@
-import { concatMap, debounceTime, distinctUntilChanged, distinctUntilKeyChanged, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
+import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
@@ -19,7 +19,8 @@ async function* infiniteRead() {
   }
 }
 
-let segment = 0;
+const state$ = new BehaviorSubject({ uid: "", state: "idle" });
+
 const rawInput$ = from(infiniteRead()).pipe(share());
 
 const idChange = from(rawInput$).pipe(
@@ -34,15 +35,20 @@ const detach$ = from(rawInput$).pipe(
   map(([_, identity]) => ({ type: "detach", uid: identity.uid }))
 );
 
-const read$ = from(rawInput$).pipe(
-  concatMap((result) => of({ type: "read", ...result, segment })),
-  distinctUntilKeyChanged("segment")
+const read$ = from(rawInput$).pipe(concatMap((result) => of({ type: "read", ...result })));
+
+const startPlay$ = read$.pipe(
+  withLatestFrom(state$),
+  filter(([_, state]) => state.state === "idle"),
+  tap(([event, _]) => state$.next({ uid: event.uid, state: "playing" })),
+  tap(([event, _]) => console.log(`Playing content for card ${event.uid}...`))
 );
 
-const interrupt$ = merge(idChange, detach$).pipe(
-  distinctUntilKeyChanged("uid"),
-  map(({ uid }) => ({ type: "interrupt", uid, segment })),
-  tap(() => segment++)
+const stopPlay$ = merge(idChange, detach$).pipe(
+  withLatestFrom(state$),
+  filter(([_, state]) => state.state === "playing"),
+  tap(([event, _state]) => state$.next({ uid: event.uid, state: "idle" })),
+  tap(([event, _]) => console.log(`Stopped playing content for card ${event.uid}.`))
 );
 
-merge(read$, interrupt$).pipe(tap(console.log)).subscribe();
+merge(startPlay$, stopPlay$).subscribe();
