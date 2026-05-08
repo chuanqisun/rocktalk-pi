@@ -1,6 +1,7 @@
 import { cancel, intro, isCancel, outro, select } from "@clack/prompts";
 import { execFile } from "node:child_process";
 import { dirname, resolve } from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
@@ -9,7 +10,8 @@ import Rc522 from "./lib/rc522.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
-const reader = new Rc522({ block: 8, pollIntervalMs: 80 });
+const READER_POLL_INTERVAL_MS = 80;
+const reader = new Rc522({ block: 8, pollIntervalMs: READER_POLL_INTERVAL_MS });
 
 function createStartEvent(uid, data) {
   return /** @type {{ type: "start", uid: string, data: string }} */ ({ type: "start", uid, data });
@@ -69,6 +71,8 @@ async function* infiniteRead() {
     } catch (error) {
       // The chip might be approaching or leaving the reader's field. It's not a fatal error
     }
+
+    await delay(READER_POLL_INTERVAL_MS);
   }
 }
 
@@ -124,7 +128,9 @@ async function handlePlaybackEvent(audioPlayer, event) {
   console.log(`[event] ${JSON.stringify(event)}`);
 
   if (event.type === "start") {
-    audioPlayer.play(event.data);
+    console.log("will start");
+    await audioPlayer.play(event.data);
+    console.log("did start");
     return;
   }
 
