@@ -1,4 +1,13 @@
-1. Enable SPI
+1. Enable SSH over USB
+
+```sh
+sudo apt update
+sudo apt install rpi-usb-gadget
+sudo rpi-usb-gadget on
+sudo reboot
+```
+
+2. Enable SPI
 
 ```sh
 sudo raspi-config
