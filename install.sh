@@ -1,1 +1,2 @@
-npm install spi-device
+npm init -y
+npm install spi-device rxjs
