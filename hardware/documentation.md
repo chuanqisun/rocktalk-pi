@@ -14,3 +14,4 @@
 - 3D model
   - [fbx, USDZ, glTF, GLB](https://sketchfab.com/3d-models/rfid-readwrite-module-rc522-09a7fab0dd574bd1bbaa267e78ffd996)
   - [f3d](https://www.autodesk.com/community/gallery/project/130273/rfid-rc522-1)
+  - [dimensions](https://components101.com/wireless/rc522-rfid-module)
