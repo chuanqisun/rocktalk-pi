@@ -1,0 +1,10 @@
+{
+  "include": ["*.js"],
+  "compilerOptions": {
+    "types": ["node"],
+    "strict": false,
+    "noEmit": true,
+    "checkJs": true,
+    "allowJs": true
+  }
+}

@@ -17,5 +17,11 @@
   "bugs": {
     "url": "https://github.com/chuanqisun/rock-talk-rpi/issues"
   },
-  "homepage": "https://github.com/chuanqisun/rock-talk-rpi#readme"
+  "homepage": "https://github.com/chuanqisun/rock-talk-rpi#readme",
+  "dependencies": {
+    "rxjs": "^7.8.2"
+  },
+  "devDependencies": {
+    "@types/node": "^25.6.2"
+  }
 }
