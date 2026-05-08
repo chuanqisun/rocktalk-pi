@@ -1,17 +1,20 @@
-import { cancel, intro, isCancel, outro, select } from "@clack/prompts";
-import { execFile } from "node:child_process";
-import { dirname, resolve } from "node:path";
-import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
-import { promisify } from "node:util";
-import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
-import AudioPlayer from "./lib/audio-player.js";
-import Rc522 from "./lib/rc522.js";
+const { execFile } = require("node:child_process");
+const { resolve } = require("node:path");
+const { setTimeout: delay } = require("node:timers/promises");
+const { promisify } = require("node:util");
+const { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } = require("rxjs");
+const AudioPlayer = require("./lib/audio-player.js");
+const Rc522 = require("./lib/rc522.js");
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
 const READER_POLL_INTERVAL_MS = 80;
 const reader = new Rc522({ block: 8, pollIntervalMs: READER_POLL_INTERVAL_MS });
+let clackPromptsPromise;
+
+async function loadClackPrompts() {
+  clackPromptsPromise ??= import("@clack/prompts");
+  return clackPromptsPromise;
+}
 
 function createStartEvent(uid, data) {
   return /** @type {{ type: "start", uid: string, data: string }} */ ({ type: "start", uid, data });
@@ -77,7 +80,7 @@ function parseCliAudioDevice(argv) {
   return null;
 }
 
-async function promptForAudioDevice() {
+async function promptForAudioDevice(select, isCancel) {
   const devices = await getAudioDevices();
 
   const selected = await select({
@@ -164,6 +167,7 @@ async function handlePlaybackEvent(audioPlayer, event) {
 }
 
 async function main() {
+  const { cancel, intro, isCancel, outro, select } = await loadClackPrompts();
   const requestedDevice = parseCliAudioDevice(process.argv.slice(2));
   const useInteractivePrompt = requestedDevice === null;
 
@@ -171,7 +175,7 @@ async function main() {
     intro("Rock Talk player");
   }
 
-  const selectedDevice = requestedDevice ?? (await promptForAudioDevice());
+  const selectedDevice = requestedDevice ?? (await promptForAudioDevice(select, isCancel));
 
   if (!selectedDevice) {
     reader.close();
@@ -212,12 +216,18 @@ main().catch((error) => {
   const message = error instanceof Error ? error.message : String(error);
   const useInteractivePrompt = parseCliAudioDevice(process.argv.slice(2)) === null;
 
-  if (useInteractivePrompt) {
-    cancel(message);
-  } else {
-    console.error(message);
-  }
+  const printError = async () => {
+    if (useInteractivePrompt) {
+      const { cancel } = await loadClackPrompts();
+      cancel(message);
+      return;
+    }
 
-  reader.close();
-  process.exitCode = 1;
+    console.error(message);
+  };
+
+  void printError().finally(() => {
+    reader.close();
+    process.exitCode = 1;
+  });
 });
