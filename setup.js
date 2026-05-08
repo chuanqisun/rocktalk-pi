@@ -162,10 +162,10 @@ async function programCard(text) {
 
 async function runAssignFlow() {
   const tracks = await listTracks();
-  const selected = await promptSelect("Choose a track to assign.", [
-    ...tracks.map((track) => ({ value: track, label: track })),
-    { value: "", label: "Clear assignment", hint: "Write an empty string" },
-  ]);
+  const selected = await promptSelect(
+    "Choose a track to assign.",
+    tracks.map((track) => ({ value: track, label: track }))
+  );
 
   if (selected === CANCELLED) {
     cancelStep();
