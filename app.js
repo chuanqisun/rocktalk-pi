@@ -39,10 +39,6 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
-async function* infinite() {
-  while (true) yield true;
-}
-
 async function* infiniteRead() {
   while (true) {
     try {
@@ -53,25 +49,30 @@ async function* infiniteRead() {
   }
 }
 
-const read$ = from(infiniteRead()).pipe(share());
+let segment = 0;
+const rawInput$ = from(infiniteRead()).pipe(share());
 
-const identity$ = from(read$).pipe(
+const idChange = from(rawInput$).pipe(
   map((result) => result.uid),
   distinctUntilChanged(),
-  map((uid) => ({ type: "identity", uid }))
+  map((uid) => ({ type: "idChange", uid }))
 );
 
-const detach$ = from(read$).pipe(
+const detach$ = from(rawInput$).pipe(
   debounceTime(220),
-  withLatestFrom(identity$),
+  withLatestFrom(idChange),
   map(([_, identity]) => ({ type: "detach", uid: identity.uid }))
 );
 
-const identify$ = from(read$).pipe(concatMap((result) => of({ type: "read", ...result })));
-
-const interrupt$ = merge(identity$, detach$).pipe(
-  distinctUntilKeyChanged("uid"),
-  map(({ uid }) => ({ type: "interrupt", uid }))
+const read$ = from(rawInput$).pipe(
+  concatMap((result) => of({ type: "read", ...result, segment })),
+  distinctUntilKeyChanged("segment")
 );
 
-merge(identify$, interrupt$).pipe(tap(console.log)).subscribe();
+const interrupt$ = merge(idChange, detach$).pipe(
+  distinctUntilKeyChanged("uid"),
+  map(({ uid }) => ({ type: "interrupt", uid, segment })),
+  tap(() => segment++)
+);
+
+merge(read$, interrupt$).pipe(tap(console.log)).subscribe();
