@@ -83,3 +83,17 @@ sudo systemctl daemon-reload
 sudo systemctl enable rocktalk.service
 sudo systemctl start rocktalk.service
 ```
+
+7. Programming rock identities
+
+```sh
+cd ~/rocktalk-pi
+node setup.js
+```
+
+Follow the interactive prompt to pair audio tracks with the rock
+After the setup, you will need to restart the service
+
+```sh
+sudo systemctl restart rocktalk.service
+```
