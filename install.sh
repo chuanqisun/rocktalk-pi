@@ -8,7 +8,7 @@ nvm install 24
 
 #  setup node dependencies
 npm init -y
-npm install spi-device rxjs @clack/prompts
+npm install spi-device rxjs @clack/prompts esbuild
 
 # register systemd service
 # TODO
