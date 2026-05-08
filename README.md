@@ -59,7 +59,7 @@ npm install spi-device rxjs @clack/prompts
 sudo cp rocktalk.service /etc/systemd/system/
 
 # stop and disable the default service if it exists
-sudo systemctl stop rocktalk.service
+sudo systemctl daemon-reload
 sudo systemctl enable rocktalk.service
 sudo systemctl start rocktalk.service
 ```
