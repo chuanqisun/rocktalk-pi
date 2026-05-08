@@ -37,11 +37,12 @@ sudo reboot
 sudo apt install mpg123
 ```
 
-3. Test audio pipeline
+3. Test hardware
 
 ```sh
 aplay -l  # list audio devices
-speaker-test -D plughw:2,0 -c 2 -t wav # 2,0 means card 2, subdevice 0, change these based on your setup
+speaker-test -D plughw:2,0 -c 2 -t wav # do you hear sound? "2,0" means card 2, device 0, change these based on your setup
+ls /dev/spidev* # is rfid reader connected? if successful, you should see something like /dev/spidev0.0 and /dev/spidev0.1
 ```
 
 4. Install nvm
