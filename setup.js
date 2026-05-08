@@ -68,6 +68,7 @@ function createCancellationWatcher() {
   }
 
   readline.emitKeypressEvents(process.stdin);
+  const shouldPauseOnCleanup = process.stdin.isPaused();
   process.stdin.resume();
 
   const shouldRestoreRawMode = !process.stdin.isRaw;
@@ -94,6 +95,10 @@ function createCancellationWatcher() {
 
     if (shouldRestoreRawMode && process.stdin.isRaw) {
       process.stdin.setRawMode(false);
+    }
+
+    if (shouldPauseOnCleanup && !process.stdin.isPaused()) {
+      process.stdin.pause();
     }
   };
 
@@ -255,4 +260,8 @@ main()
   })
   .finally(() => {
     reader.close();
+
+    if (process.stdin.isTTY && !process.stdin.isPaused()) {
+      process.stdin.pause();
+    }
   });
