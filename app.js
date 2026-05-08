@@ -1,4 +1,4 @@
-import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
+import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, skip, tap, withLatestFrom } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8, pollIntervalMs: 100 });
@@ -26,6 +26,7 @@ const rawInput$ = from(infiniteRead()).pipe(share());
 const idChange = from(rawInput$).pipe(
   map((result) => result.uid),
   distinctUntilChanged(),
+  skip(1), // Skip the initial empty UID
   map((uid) => ({ type: "idChange", uid }))
 );
 
