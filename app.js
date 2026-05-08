@@ -12,7 +12,7 @@ process.on("SIGINT", () => {
 async function* infiniteRead() {
   while (true) {
     try {
-      yield reader.readAsync();
+      yield reader.readTextAsync();
     } catch (error) {
       // The chip might be approaching or leaving the reader's field. It's not a fatal error
     }
@@ -44,21 +44,34 @@ const startPlay$ = read$.pipe(
   withLatestFrom(state$),
   filter(([_, state]) => state.state === "idle"),
   tap(([event, _]) => state$.next({ uid: event.uid, state: "playing" })),
-  tap(([event, _]) => console.log(`[playing] ${event.uid}...`))
+  tap(([event, _]) => console.log(`[playing] ${event.uid}...`)),
+  map(([event]) => ({
+    type: "start",
+    uid: event.uid,
+    data: event.text,
+  }))
 );
 
 const hopSwap$ = idChange$.pipe(
   withLatestFrom(state$),
   filter(([idChange, state]) => state.state === "playing" && state.uid !== idChange.uid),
-  tap(([idChange, _]) => state$.next({ uid: idChange.uid, state: "idle" })),
-  tap(([idChange, _]) => console.log(`[stopped] ${idChange.uid}.`))
+  tap(() => state$.next({ uid: "", state: "idle" })),
+  tap(([_, state]) => console.log(`[stopped] ${state.uid}.`)),
+  map(([_, state]) => ({ type: "stop" }))
 );
 
 const stopPlay$ = detach$.pipe(
   withLatestFrom(state$),
   filter(([detach, state]) => state.state === "playing" && detach.uid === state.uid),
-  tap(([detach, _state]) => state$.next({ uid: detach.uid, state: "idle" })),
-  tap(([detach, _]) => console.log(`[stopped] ${detach.uid}.`))
+  tap(() => state$.next({ uid: "", state: "idle" })),
+  tap(([_, state]) => console.log(`[stopped] ${state.uid}.`)),
+  map(([_, state]) => ({ type: "stop" }))
 );
 
-merge(startPlay$, hopSwap$, stopPlay$).subscribe();
+merge(startPlay$, hopSwap$, stopPlay$)
+  .pipe(
+    tap((event) => {
+      console.log(`[event] ${JSON.stringify(event)}`);
+    })
+  )
+  .subscribe();
