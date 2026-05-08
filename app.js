@@ -27,14 +27,14 @@ const idChange = from(rawInput$).pipe(
   map((result) => result.uid),
   distinctUntilChanged(),
   map((uid) => ({ type: "idChange", uid })),
-  tap((event) => console.log(`id changed to ${event.uid}.`))
+  tap((event) => console.log(`[id changed] ${event.uid}.`))
 );
 
 const detach$ = from(rawInput$).pipe(
   debounceTime(220),
   withLatestFrom(idChange),
   map(([_, identity]) => ({ type: "detach", uid: identity.uid })),
-  tap((event) => console.log(`id detached ${event.uid}.`))
+  tap((event) => console.log(`[detached] ${event.uid}.`))
 );
 
 const read$ = from(rawInput$).pipe(concatMap((result) => of({ type: "read", ...result })));
@@ -43,14 +43,14 @@ const startPlay$ = read$.pipe(
   withLatestFrom(state$),
   filter(([_, state]) => state.state === "idle"),
   tap(([event, _]) => state$.next({ uid: event.uid, state: "playing" })),
-  tap(([event, _]) => console.log(`Playing ${event.uid}...`))
+  tap(([event, _]) => console.log(`[playing] ${event.uid}...`))
 );
 
 const stopPlay$ = merge(idChange, detach$).pipe(
   withLatestFrom(state$),
   filter(([_, state]) => state.state === "playing"),
   tap(([event, _state]) => state$.next({ uid: event.uid, state: "idle" })),
-  tap(([event, _]) => console.log(`Stopped ${event.uid}.`))
+  tap(([event, _]) => console.log(`[stopped] ${event.uid}.`))
 );
 
 merge(startPlay$, stopPlay$).subscribe();
