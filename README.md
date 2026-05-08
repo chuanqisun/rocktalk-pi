@@ -14,7 +14,7 @@ sudo raspi-config
 sudo reboot
 ```
 
-2. Install packagea
+2. Install packages
 
 ```sh
 sudo apt install i2c-tools mpg123
