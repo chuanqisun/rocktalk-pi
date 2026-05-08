@@ -31,12 +31,23 @@ speaker-test -D plughw:2,0 -c 2 -t wav # 2,0 means card 2, subdevice 0, change t
 
 ```sh
 curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.40.4/install.sh | bash
+
+# Need to logout, login again
+nvm install 24
 ```
 
-5. Install node
+5. Clone repo
 
 ```sh
-nvm install 24
+sudo apt install git
+git clone https://github.com/chuanqisun/rocktalk-pi.git
+```
+
+6. Install dependencies
+
+```sh
+cd rocktalk-pi
+
 #  setup node dependencies
 npm init -y
 npm install spi-device rxjs @clack/prompts
