@@ -1,4 +1,4 @@
-import { catchError, concatMap, from, of } from "rxjs";
+import { concatMap, from, of } from "rxjs";
 import Rc522 from "./lib/rc522.js";
 
 const reader = new Rc522({ block: 8 });
@@ -39,32 +39,18 @@ process.on("SIGINT", () => {
   process.exit(0);
 });
 
-// try {
-//   if (isWriteMode) {
-//     const writeResult = await reader.writeAsync(writeContent, { block: 8 });
-//     logResult(writeResult);
-//   } else {
-//     const readResult = await reader.readAsync();
-//     logResult(readResult);
-//   }
-// } catch (error) {
-//   console.error(error.message);
-//   process.exitCode = 1;
-// } finally {
-//   reader.close();
-// }
-
 async function* infiniteRead() {
   while (true) {
-    yield reader.readAsync();
+    try {
+      yield reader.readAsync();
+    } catch (error) {
+      console.error(error.message);
+      yield null; // Yield null on error to keep the loop running
+    }
   }
 }
 
 const read$ = from(infiniteRead()).pipe(
-  catchError((error) => {
-    console.error(error.message);
-    return of(null); // Continue the stream even if there's an error
-  }),
   concatMap((result) => {
     console.log(JSON.stringify(result));
     return of(result);
