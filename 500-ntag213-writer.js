@@ -25,6 +25,7 @@ const TxControlReg = 0x14;
 const TxASKReg = 0x15;
 const CRCResultRegH = 0x21;
 const CRCResultRegL = 0x22;
+const RFCfgReg = 0x26;
 const TModeReg = 0x2a;
 const TPrescalerReg = 0x2b;
 const TReloadRegH = 0x2c;
@@ -47,7 +48,6 @@ const PICC_ANTICOLL_CL2 = 0x95;
 const PICC_SELECT_CL1 = 0x93;
 const PICC_SELECT_CL2 = 0x95;
 const PICC_READ = 0x30;
-const PICC_COMPATIBILITY_WRITE = 0xa0;
 const PICC_WRITE = 0xa2;
 const PICC_GET_VERSION = 0x60;
 const PICC_HALT = 0x50;
@@ -59,8 +59,11 @@ const USER_START_PAGE = 4;
 const WRITE_ATTEMPTS = 5;
 const WRITE_SETTLE_MS = 12;
 const INTER_COMMAND_SETTLE_MS = 3;
+const VERIFY_POLL_MS = 8;
+const VERIFY_TIMEOUT_MS = 80;
 const WRITE_ACK_TIMEOUT_MS = 20;
 const WRITE_RECOVERY_RESELECT_ATTEMPTS = 3;
+const READ_CHUNK_PAGE_COUNT = 4;
 const DEBUG = process.env.NTAG_DEBUG === "1";
 
 // SPI address format:
@@ -179,6 +182,7 @@ function init(dev) {
   // Keep 106 kbps defaults explicit while debugging.
   writeReg(dev, TxModeReg, 0x00);
   writeReg(dev, RxModeReg, 0x00);
+  writeReg(dev, RFCfgReg, 0x70);
   writeReg(dev, CollReg, 0x80);
 
   antennaOn(dev);
@@ -399,8 +403,10 @@ function readPage(dev, page) {
 function readPages(dev, startPage, pageCount) {
   const out = [];
 
-  for (let index = 0; index < pageCount; index += 1) {
-    out.push(...readPage(dev, startPage + index));
+  for (let index = 0; index < pageCount; index += READ_CHUNK_PAGE_COUNT) {
+    const chunkPageCount = Math.min(READ_CHUNK_PAGE_COUNT, pageCount - index);
+    const chunk = readPagesRaw(dev, startPage + index);
+    out.push(...chunk.slice(0, chunkPageCount * 4));
   }
 
   return out;
@@ -430,37 +436,19 @@ function writePageOnce(dev, page, data4) {
   return decodeAck(res, `WRITE ${page}`);
 }
 
-function compatibilityWritePageOnce(dev, page, data4) {
-  writeReg(dev, BitFramingReg, 0x00);
-
-  const requestFrame = [PICC_COMPATIBILITY_WRITE, page];
-  const requestCrc = calculateCRC(dev, requestFrame);
-  const requestRes = transceive(dev, [...requestFrame, requestCrc[0], requestCrc[1]], 0x00, WRITE_ACK_TIMEOUT_MS);
-  const requestAck = decodeAck(requestRes, `COMPATIBILITY_WRITE ${page} part 1`);
-
-  if (!requestAck.ok) {
-    return requestAck;
-  }
-
-  const paddedData = Buffer.alloc(16, 0x00);
-  Buffer.from(data4).copy(paddedData, 0, 0, 4);
-
-  const dataFrame = [...paddedData];
-  const dataCrc = calculateCRC(dev, dataFrame);
-  const dataRes = transceive(dev, [...dataFrame, dataCrc[0], dataCrc[1]], 0x00, WRITE_ACK_TIMEOUT_MS);
-
-  return decodeAck(dataRes, `COMPATIBILITY_WRITE ${page} part 2`);
-}
-
-function verifyPageData(dev, page, data4) {
-  return arraysEqual(readPage(dev, page), [...data4]);
-}
-
 function recoverCard(dev, uid, attempts = WRITE_RECOVERY_RESELECT_ATTEMPTS) {
   let lastError = new Error("Unable to wake NTAG213");
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     try {
+      try {
+        haltA(dev);
+      } catch (_) {
+        // Ignore; the tag may already be out of ACTIVE state.
+      }
+
+      sleepMs(INTER_COMMAND_SETTLE_MS);
+
       const card = readCard(dev, PICC_WUPA);
 
       if (uid && !arraysEqual(card.uid, uid)) {
@@ -477,119 +465,109 @@ function recoverCard(dev, uid, attempts = WRITE_RECOVERY_RESELECT_ATTEMPTS) {
   throw lastError;
 }
 
-function verifyPageAfterWrite(dev, page, data4, uid) {
-  sleepMs(WRITE_SETTLE_MS);
-
-  try {
-    if (verifyPageData(dev, page, data4)) {
-      return { ok: true };
-    }
-  } catch (error) {
-    if (error.debugState) {
-      debugLog(`Direct verify failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
-    }
-  }
-
-  try {
-    recoverCard(dev, uid);
-    sleepMs(INTER_COMMAND_SETTLE_MS);
-
-    if (verifyPageData(dev, page, data4)) {
-      return { ok: true, recovered: true };
-    }
-
-    return { ok: false, reason: "Verification mismatch after wakeup" };
-  } catch (error) {
-    if (error.debugState) {
-      debugLog(`Wakeup verify failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
-    }
-
-    return { ok: false, reason: error.message };
-  }
+function readPagesBuffer(dev, startPage, pageCount) {
+  return Buffer.from(readPages(dev, startPage, pageCount));
 }
 
-function writePageWithVerification(dev, page, data4, uid, methodName, writeFn) {
-  let writeReason = null;
+function waitForChunkData(dev, startPage, expected, uid, timeoutMs = VERIFY_TIMEOUT_MS) {
+  const deadline = Date.now() + timeoutMs;
+  let lastReason = "Verification mismatch after wakeup";
 
-  try {
-    const result = writeFn(dev, page, data4);
-
-    if (!result.ok) {
-      writeReason = result.reason;
-    }
-  } catch (error) {
-    if (error.debugState) {
-      debugLog(`${methodName} command failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
-    }
-
-    writeReason = error.message;
-  }
-
-  const verification = verifyPageAfterWrite(dev, page, data4, uid);
-
-  if (verification.ok) {
-    if (writeReason) {
-      debugLog(`${methodName} page=${page} committed despite missed ACK (${writeReason})`);
-    }
-
-    return { ok: true };
-  }
-
-  return {
-    ok: false,
-    reason: verification.reason || writeReason || `${methodName} failed`,
-  };
-}
-
-function writePageRobust(dev, page, data4, uid, attempts = WRITE_ATTEMPTS) {
-  let lastReason = "Unknown write failure";
-
-  for (let attempt = 0; attempt < attempts; attempt += 1) {
-    debugLog(`Write attempt ${attempt + 1}/${attempts} page=${page} data=${hex([...data4])}`);
-
-    const writeResult = writePageWithVerification(dev, page, data4, uid, "WRITE", writePageOnce);
-
-    if (writeResult.ok) {
-      return;
-    }
-
-    lastReason = writeResult.reason;
-    debugLog(`WRITE did not verify page=${page} reason=${lastReason}`);
-
-    const compatibilityResult = writePageWithVerification(dev, page, data4, uid, "COMPATIBILITY_WRITE", compatibilityWritePageOnce);
-
-    if (compatibilityResult.ok) {
-      return;
-    }
-
-    lastReason = compatibilityResult.reason;
-    debugLog(`COMPATIBILITY_WRITE did not verify page=${page} reason=${lastReason}`);
-
-    sleepMs(WRITE_SETTLE_MS + attempt * 5);
-
-    try {
-      haltA(dev);
-    } catch (error) {
-      if (error.debugState) {
-        debugLog(`Retry halt failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
-      }
-    }
-
-    sleepMs(INTER_COMMAND_SETTLE_MS);
-
+  while (Date.now() <= deadline) {
     try {
       recoverCard(dev, uid);
       sleepMs(INTER_COMMAND_SETTLE_MS);
+
+      const actual = readPagesBuffer(dev, startPage, expected.length / 4);
+
+      if (actual.equals(expected)) {
+        return { ok: true, actual };
+      }
+
+      lastReason = "Verification mismatch after wakeup";
+      debugLog(`Chunk verify mismatch pages=${startPage}..${startPage + expected.length / 4 - 1} expected=${hex([...expected])} actual=${hex([...actual])}`);
     } catch (error) {
       if (error.debugState) {
-        debugLog(`Retry wakeup failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+        debugLog(
+          `Chunk verify failed pages=${startPage}..${startPage + expected.length / 4 - 1} reason=${error.message} ${formatDebugState(error.debugState)}`
+        );
       }
 
       lastReason = error.message;
     }
+
+    if (Date.now() + VERIFY_POLL_MS > deadline) {
+      break;
+    }
+
+    sleepMs(VERIFY_POLL_MS);
   }
 
-  throw new Error(`Could not write page ${page}: ${lastReason}`);
+  return { ok: false, reason: lastReason };
+}
+
+function writeChunkRobust(dev, startPage, payload, uid, attempts = WRITE_ATTEMPTS) {
+  let lastReason = "Unknown write failure";
+  const pageCount = payload.length / 4;
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    debugLog(`Chunk attempt ${attempt + 1}/${attempts} pages=${startPage}..${startPage + pageCount - 1} data=${hex([...payload])}`);
+
+    let current;
+
+    try {
+      current = readPagesBuffer(dev, startPage, pageCount);
+
+      if (current.equals(payload)) {
+        return payload;
+      }
+    } catch (error) {
+      if (error.debugState) {
+        debugLog(`Chunk pre-read failed pages=${startPage}..${startPage + pageCount - 1} reason=${error.message} ${formatDebugState(error.debugState)}`);
+      }
+    }
+
+    for (let index = 0; index < pageCount; index += 1) {
+      const page = startPage + index;
+      const desired = payload.subarray(index * 4, (index + 1) * 4);
+      const currentPage = current?.subarray(index * 4, (index + 1) * 4);
+
+      if (currentPage?.equals(desired)) {
+        continue;
+      }
+
+      try {
+        recoverCard(dev, uid);
+        sleepMs(INTER_COMMAND_SETTLE_MS);
+
+        const result = writePageOnce(dev, page, desired);
+
+        if (!result.ok) {
+          lastReason = result.reason;
+          debugLog(`WRITE did not ACK page=${page} reason=${lastReason}`);
+        }
+      } catch (error) {
+        if (error.debugState) {
+          debugLog(`WRITE failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+        }
+
+        lastReason = error.message;
+      }
+
+      sleepMs(WRITE_SETTLE_MS + attempt * 4);
+    }
+
+    const verification = waitForChunkData(dev, startPage, payload, uid, VERIFY_TIMEOUT_MS + attempt * 20);
+
+    if (verification.ok) {
+      return verification.actual;
+    }
+
+    lastReason = verification.reason;
+    sleepMs(WRITE_SETTLE_MS + attempt * 5);
+  }
+
+  throw new Error(`Could not write pages ${startPage}..${startPage + pageCount - 1}: ${lastReason}`);
 }
 
 function buildPayloadPages(text) {
@@ -607,16 +585,18 @@ function buildPayloadPages(text) {
 
 function writeText(dev, card, startPage, text) {
   const { payload, pageCount } = buildPayloadPages(text);
+  const verifiedChunks = [];
 
   sleepMs(INTER_COMMAND_SETTLE_MS);
 
-  for (let index = 0; index < pageCount; index += 1) {
+  for (let index = 0; index < pageCount; index += READ_CHUNK_PAGE_COUNT) {
+    const chunkPageCount = Math.min(READ_CHUNK_PAGE_COUNT, pageCount - index);
     const page = startPage + index;
-    const chunk = payload.subarray(index * 4, (index + 1) * 4);
-    writePageRobust(dev, page, chunk, card.uid);
+    const chunk = payload.subarray(index * 4, (index + chunkPageCount) * 4);
+    verifiedChunks.push(writeChunkRobust(dev, page, chunk, card.uid));
   }
 
-  const verified = Buffer.from(readPages(dev, startPage, pageCount));
+  const verified = Buffer.concat(verifiedChunks);
 
   if (!verified.equals(payload)) {
     throw new Error(`Verification failed for pages ${startPage}..${startPage + pageCount - 1}`);
