@@ -1,176 +1,231 @@
 /* @ts-ignore */
 import SPI from "spi-device";
 
-// PN532 over SPI, usually /dev/spidev0.0
-const dev = SPI.openSync(0, 0, {
-  mode: SPI.MODE0,
-  maxSpeedHz: 1000000,
-});
+const SPI_BUS = 0;
+const SPI_DEVICE = 0;
+const SPEED_HZ = 1_000_000;
 
-const PREAMBLE = 0x00;
-const START1 = 0x00;
-const START2 = 0xff;
-const POSTAMBLE = 0x00;
+// MFRC522 registers
+const CommandReg = 0x01;
+const ComIEnReg = 0x02;
+const ComIrqReg = 0x04;
+const ErrorReg = 0x06;
+const FIFODataReg = 0x09;
+const FIFOLevelReg = 0x0a;
+const ControlReg = 0x0c;
+const BitFramingReg = 0x0d;
+const ModeReg = 0x11;
+const TxModeReg = 0x12;
+const RxModeReg = 0x13;
+const TxControlReg = 0x14;
+const TxASKReg = 0x15;
+const TModeReg = 0x2a;
+const TPrescalerReg = 0x2b;
+const TReloadRegH = 0x2c;
+const TReloadRegL = 0x2d;
+const VersionReg = 0x37;
 
-function sleep(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
-}
+// MFRC522 commands
+const PCD_IDLE = 0x00;
+const PCD_TRANSCEIVE = 0x0c;
+const PCD_SOFTRESET = 0x0f;
 
-function xfer(tx, len = tx.length) {
-  const message = [
+// PICC commands
+const PICC_REQA = 0x26;
+const PICC_ANTICOLL_CL1 = 0x93;
+const PICC_ANTICOLL_CL2 = 0x95;
+
+// SPI address format:
+// write: ((reg << 1) & 0x7E)
+// read:  ((reg << 1) & 0x7E) | 0x80
+function writeReg(dev, reg, val) {
+  const tx = Buffer.from([(reg << 1) & 0x7e, val]);
+  const rx = Buffer.alloc(2);
+
+  dev.transferSync([
     {
-      sendBuffer: Buffer.from(tx),
-      receiveBuffer: Buffer.alloc(len),
-      byteLength: len,
-      speedHz: 1000000,
+      sendBuffer: tx,
+      receiveBuffer: rx,
+      byteLength: 2,
+      speedHz: SPEED_HZ,
     },
-  ];
-
-  dev.transferSync(message);
-  return message[0].receiveBuffer;
+  ]);
 }
 
-// PN532 SPI framing helpers.
-// SPI host-to-PN532 write starts with 0x01.
-// SPI read starts with 0x03.
-// Status read starts with 0x02.
-function pn532WriteFrame(data) {
-  const len = data.length;
-  const lcs = (0x100 - len) & 0xff;
-  const dcs = (0x100 - (data.reduce((a, b) => a + b, 0) & 0xff)) & 0xff;
+function readReg(dev, reg) {
+  const tx = Buffer.from([((reg << 1) & 0x7e) | 0x80, 0x00]);
+  const rx = Buffer.alloc(2);
 
-  const frame = [
-    0x01, // SPI data write
-    PREAMBLE,
-    START1,
-    START2,
-    len,
-    lcs,
-    ...data,
-    dcs,
-    POSTAMBLE,
-  ];
+  dev.transferSync([
+    {
+      sendBuffer: tx,
+      receiveBuffer: rx,
+      byteLength: 2,
+      speedHz: SPEED_HZ,
+    },
+  ]);
 
-  xfer(frame);
+  return rx[1];
 }
 
-function pn532ReadStatus() {
-  const r = xfer([0x02, 0x00], 2);
-  return r[1];
+function setBitMask(dev, reg, mask) {
+  writeReg(dev, reg, readReg(dev, reg) | mask);
 }
 
-async function waitReady(timeoutMs = 1000) {
-  const start = Date.now();
+function clearBitMask(dev, reg, mask) {
+  writeReg(dev, reg, readReg(dev, reg) & ~mask);
+}
 
-  while (Date.now() - start < timeoutMs) {
-    if (pn532ReadStatus() === 0x01) return;
-    await sleep(10);
+function sleepMs(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+function reset(dev) {
+  writeReg(dev, CommandReg, PCD_SOFTRESET);
+  sleepMs(50);
+}
+
+function antennaOn(dev) {
+  const v = readReg(dev, TxControlReg);
+  if ((v & 0x03) !== 0x03) {
+    setBitMask(dev, TxControlReg, 0x03);
+  }
+}
+
+function init(dev) {
+  reset(dev);
+
+  // Timer settings commonly used by MFRC522 examples
+  writeReg(dev, TModeReg, 0x8d);
+  writeReg(dev, TPrescalerReg, 0x3e);
+  writeReg(dev, TReloadRegL, 30);
+  writeReg(dev, TReloadRegH, 0);
+
+  writeReg(dev, TxASKReg, 0x40);
+  writeReg(dev, ModeReg, 0x3d);
+
+  antennaOn(dev);
+}
+
+function calculateBcc(bytes) {
+  return bytes.reduce((a, b) => a ^ b, 0);
+}
+
+function transceive(dev, data, validBits = 0) {
+  writeReg(dev, CommandReg, PCD_IDLE);
+  writeReg(dev, ComIrqReg, 0x7f); // clear IRQ flags
+  setBitMask(dev, FIFOLevelReg, 0x80); // flush FIFO
+
+  for (const b of data) {
+    writeReg(dev, FIFODataReg, b);
   }
 
-  throw new Error("PN532 timeout waiting for ready");
+  writeReg(dev, BitFramingReg, validBits & 0x07);
+  writeReg(dev, CommandReg, PCD_TRANSCEIVE);
+  setBitMask(dev, BitFramingReg, 0x80); // StartSend
+
+  let i = 2000;
+  let irq;
+  do {
+    irq = readReg(dev, ComIrqReg);
+    i--;
+  } while (i && !(irq & 0x30)); // RxIRq or IdleIRq
+
+  clearBitMask(dev, BitFramingReg, 0x80);
+
+  if (i === 0) {
+    throw new Error("Timeout waiting for tag");
+  }
+
+  const error = readReg(dev, ErrorReg);
+  if (error & 0x13) {
+    throw new Error(`MFRC522 error: 0x${error.toString(16)}`);
+  }
+
+  const len = readReg(dev, FIFOLevelReg);
+  const lastBits = readReg(dev, ControlReg) & 0x07;
+  const out = [];
+
+  for (let j = 0; j < len; j++) {
+    out.push(readReg(dev, FIFODataReg));
+  }
+
+  return { data: out, bits: lastBits ? (len - 1) * 8 + lastBits : len * 8 };
 }
 
-function pn532ReadFrame(maxLen = 64) {
-  const r = xfer([0x03, ...Buffer.alloc(maxLen)], maxLen + 1);
+function requestA(dev) {
+  // REQA is 7 bits, not a full byte
+  writeReg(dev, BitFramingReg, 0x07);
+  return transceive(dev, [PICC_REQA], 0x07);
+}
 
-  // Drop SPI leading byte.
-  const b = [...r.slice(1)];
+function anticollision(dev, cascadeCmd) {
+  writeReg(dev, BitFramingReg, 0x00);
 
-  // Find 00 00 FF
-  let i = -1;
-  for (let n = 0; n < b.length - 2; n++) {
-    if (b[n] === 0x00 && b[n + 1] === 0x00 && b[n + 2] === 0xff) {
-      i = n;
-      break;
+  // NVB = 0x20 means anticollision, no UID bits known yet
+  const res = transceive(dev, [cascadeCmd, 0x20], 0x00);
+
+  // Expected: 5 bytes = 4 UID/BCC bytes + BCC
+  if (res.data.length < 5) {
+    throw new Error(`Anticollision failed, got ${res.data.length} bytes`);
+  }
+
+  const block = res.data.slice(0, 5);
+  const bcc = calculateBcc(block.slice(0, 4));
+
+  if (bcc !== block[4]) {
+    throw new Error("UID BCC check failed");
+  }
+
+  return block;
+}
+
+function readUid(dev) {
+  requestA(dev);
+
+  const cl1 = anticollision(dev, PICC_ANTICOLL_CL1);
+
+  // 7-byte UID uses cascade tag 0x88 in CL1
+  if (cl1[0] === 0x88) {
+    const uid0to2 = cl1.slice(1, 4);
+
+    const cl2 = anticollision(dev, PICC_ANTICOLL_CL2);
+    const uid3to6 = cl2.slice(0, 4);
+
+    return uid0to2.concat(uid3to6);
+  }
+
+  // 4-byte UID
+  return cl1.slice(0, 4);
+}
+
+function hex(bytes) {
+  return bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(":");
+}
+
+const dev = SPI.openSync(SPI_BUS, SPI_DEVICE, {
+  mode: SPI.MODE0,
+  maxSpeedHz: SPEED_HZ,
+});
+
+try {
+  init(dev);
+
+  const version = readReg(dev, VersionReg);
+  console.log(`MFRC522 VersionReg: 0x${version.toString(16).padStart(2, "0")}`);
+
+  console.log("Place NTAG213 near the reader...");
+
+  while (true) {
+    try {
+      const uid = readUid(dev);
+      console.log(`NTAG UID: ${hex(uid)}`);
+      sleepMs(1000);
+    } catch (_) {
+      // No tag present or transient read error.
+      sleepMs(100);
     }
   }
-
-  if (i < 0) throw new Error("Bad PN532 frame");
-
-  const len = b[i + 3];
-  const lcs = b[i + 4];
-
-  if (((len + lcs) & 0xff) !== 0) {
-    throw new Error("Bad PN532 length checksum");
-  }
-
-  const data = b.slice(i + 5, i + 5 + len);
-  const dcs = b[i + 5 + len];
-
-  const sum = data.reduce((a, v) => a + v, 0);
-  if (((sum + dcs) & 0xff) !== 0) {
-    throw new Error("Bad PN532 data checksum");
-  }
-
-  return Buffer.from(data);
-}
-
-async function pn532Command(cmdBytes, timeoutMs = 1000) {
-  // Host -> PN532 frame: TFI 0xD4 + command bytes
-  pn532WriteFrame([0xd4, ...cmdBytes]);
-
-  // ACK frame
-  await waitReady(timeoutMs);
-  pn532ReadFrame(16);
-
-  // Response frame
-  await waitReady(timeoutMs);
-  const data = pn532ReadFrame(128);
-
-  if (data[0] !== 0xd5) {
-    throw new Error("Unexpected PN532 response TFI");
-  }
-
-  return data.slice(1);
-}
-
-async function main() {
-  // Wake PN532
-  xfer([0x00, 0x00, 0x00, 0x00]);
-  await sleep(100);
-
-  // SAMConfiguration: normal mode
-  await pn532Command([0x14, 0x01, 0x14, 0x01]);
-
-  // InListPassiveTarget:
-  // max 1 target, 106 kbps type A
-  const listed = await pn532Command([0x4a, 0x01, 0x00], 3000);
-
-  if (listed[0] !== 0x4b || listed[1] < 1) {
-    throw new Error("No NFC-A tag found");
-  }
-
-  const targetNumber = listed[2];
-
-  // InDataExchange:
-  // send raw NTAG GET_VERSION command 0x60
-  const resp = await pn532Command([0x40, targetNumber, 0x60]);
-
-  if (resp[0] !== 0x41 || resp[1] !== 0x00) {
-    throw new Error("Tag did not accept GET_VERSION");
-  }
-
-  const version = resp.slice(2, 10);
-
-  console.log("GET_VERSION:", version.toString("hex").match(/../g).join(" "));
-
-  // NTAG213 expected GET_VERSION:
-  // 00 04 04 02 01 00 0f 03
-  const expectedNtag213 = Buffer.from([0x00, 0x04, 0x04, 0x02, 0x01, 0x00, 0x0f, 0x03]);
-
-  if (version.equals(expectedNtag213)) {
-    console.log("Identified: NTAG213");
-  } else {
-    console.log("Identified: not exact NTAG213 match");
-  }
-
+} finally {
   dev.closeSync();
 }
-
-main().catch((err) => {
-  try {
-    dev.closeSync();
-  } catch (_) {}
-  console.error(err.message);
-  process.exit(1);
-});
