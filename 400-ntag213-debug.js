@@ -398,7 +398,7 @@ try {
       }
 
       console.log(`FAST_READ page 4..11: ${hex(page4to11)}`);
-  console.log(`FAST_READ text: ${decodedText || "<no printable text>"}`);
+      console.log(`FAST_READ text: ${decodedText || "<no printable text>"}`);
       console.log("---");
 
       haltA(dev);
