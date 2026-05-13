@@ -4,6 +4,7 @@ import SPI from "spi-device";
 const SPI_BUS = 0;
 const SPI_DEVICE = 0;
 const SPEED_HZ = 1_000_000;
+const CRC_A_BYTE_LENGTH = 2;
 
 // MFRC522 registers
 const CommandReg = 0x01;
@@ -49,6 +50,8 @@ const PICC_READ = 0x30;
 const PICC_WRITE = 0xa2;
 const PICC_GET_VERSION = 0x60;
 const PICC_HALT = 0x50;
+const NTAG_READ_RESPONSE_LENGTH = 16;
+const NTAG_GET_VERSION_RESPONSE_LENGTH = 8;
 
 const TEXT_PAYLOAD = "hello-world-123";
 const USER_START_PAGE = 4;
@@ -366,16 +369,24 @@ function haltA(dev) {
   }
 }
 
+function readExpectedPayload(res, expectedLength, label) {
+  const expectedLengths = new Set([expectedLength, expectedLength + CRC_A_BYTE_LENGTH]);
+
+  if (!expectedLengths.has(res.data.length)) {
+    throw new Error(`${label} returned ${res.data.length} bytes`);
+  }
+
+  // Some MFRC522 configurations leave the tag's trailing CRC_A in the FIFO.
+  // The payload is still the leading bytes before the optional CRC_A suffix.
+  return res.data.slice(0, expectedLength);
+}
+
 function readPagesRaw(dev, page) {
   const frame = [PICC_READ, page];
   const crc = calculateCRC(dev, frame);
   const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 30);
 
-  if (res.data.length !== 16) {
-    throw new Error(`READ ${page} returned ${res.data.length} bytes`);
-  }
-
-  return res.data;
+  return readExpectedPayload(res, NTAG_READ_RESPONSE_LENGTH, `READ ${page}`);
 }
 
 function readPage(dev, page) {
@@ -536,11 +547,7 @@ function getVersion(dev) {
   const crc = calculateCRC(dev, [PICC_GET_VERSION]);
   const res = transceive(dev, [PICC_GET_VERSION, crc[0], crc[1]], 0x00, 30);
 
-  if (res.data.length !== 8) {
-    throw new Error(`GET_VERSION returned ${res.data.length} bytes`);
-  }
-
-  return res.data;
+  return readExpectedPayload(res, NTAG_GET_VERSION_RESPONSE_LENGTH, "GET_VERSION");
 }
 
 function readCard(dev, requestCommand = PICC_WUPA) {
