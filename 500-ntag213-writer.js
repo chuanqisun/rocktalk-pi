@@ -556,14 +556,7 @@ function writePageRobust(dev, page, data4, uid, attempts = WRITE_ATTEMPTS) {
     lastReason = writeResult.reason;
     debugLog(`WRITE did not verify page=${page} reason=${lastReason}`);
 
-    const compatibilityResult = writePageWithVerification(
-      dev,
-      page,
-      data4,
-      uid,
-      "COMPATIBILITY_WRITE",
-      compatibilityWritePageOnce,
-    );
+    const compatibilityResult = writePageWithVerification(dev, page, data4, uid, "COMPATIBILITY_WRITE", compatibilityWritePageOnce);
 
     if (compatibilityResult.ok) {
       return;
