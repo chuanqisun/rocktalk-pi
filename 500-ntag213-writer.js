@@ -321,7 +321,16 @@ function calculateCRC(dev, data) {
 function request(dev, command) {
   // REQA/WUPA are 7 bits, not a full byte
   writeReg(dev, BitFramingReg, 0x07);
-  return transceive(dev, [command], 0x07);
+  const res = transceive(dev, [command], 0x07);
+
+  if (res.bits !== 16 || res.data.length < 2) {
+    throw new Error(`No tag in field (${command === PICC_WUPA ? "WUPA" : "REQA"} returned ${res.bits} bits/${res.data.length} bytes)`);
+  }
+
+  return {
+    data: res.data.slice(0, 2),
+    bits: 16,
+  };
 }
 
 function requestA(dev) {
