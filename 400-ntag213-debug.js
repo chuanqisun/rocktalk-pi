@@ -42,6 +42,7 @@ const PICC_ANTICOLL_CL2 = 0x95;
 const PICC_SELECT_CL1 = 0x93;
 const PICC_SELECT_CL2 = 0x95;
 const PICC_READ = 0x30;
+const PICC_FAST_READ = 0x3a;
 const PICC_GET_VERSION = 0x60;
 const PICC_HALT = 0x50;
 const NTAG_READ_RESPONSE_LENGTH = 16;
@@ -285,6 +286,24 @@ function readPagesRaw(dev, page) {
   return res.data.slice(0, NTAG_READ_RESPONSE_LENGTH);
 }
 
+function fastReadPagesRaw(dev, startPage, endPage) {
+  if (endPage < startPage) {
+    throw new Error(`FAST_READ range is invalid: ${startPage}..${endPage}`);
+  }
+
+  const expectedLength = (endPage - startPage + 1) * 4;
+  const frame = [PICC_FAST_READ, startPage, endPage];
+  const crc = calculateCRC(dev, frame);
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 30);
+  const expectedLengths = new Set([expectedLength, expectedLength + CRC_A_BYTE_LENGTH]);
+
+  if (!expectedLengths.has(res.data.length)) {
+    throw new Error(`FAST_READ ${startPage}..${endPage} returned ${res.data.length} bytes`);
+  }
+
+  return res.data.slice(0, expectedLength);
+}
+
 function getVersion(dev) {
   const crc = calculateCRC(dev, [PICC_GET_VERSION]);
   const res = transceive(dev, [PICC_GET_VERSION, crc[0], crc[1]], 0x00, 30);
@@ -334,6 +353,14 @@ function hex(bytes) {
   return bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(":");
 }
 
+function decodeText(bytes) {
+  return Buffer.from(bytes)
+    .toString("utf8")
+    .replace(/\0+$/u, "")
+    .replace(/[^\x20-\x7E\n\r\t]/g, " ")
+    .trim();
+}
+
 const dev = SPI.openSync(SPI_BUS, SPI_DEVICE, {
   mode: SPI.MODE0,
   maxSpeedHz: SPEED_HZ,
@@ -356,7 +383,8 @@ try {
   while (true) {
     try {
       const card = readCard(dev);
-      const page4 = readPagesRaw(dev, 4);
+      const page4to11 = fastReadPagesRaw(dev, 4, 11);
+      const decodedText = decodeText(page4to11);
 
       console.log(`ATQA: ${hex(card.atqa)}`);
       console.log(`SAK: 0x${card.sak.toString(16).padStart(2, "0")}`);
@@ -369,7 +397,8 @@ try {
         console.log(`GET_VERSION failed: ${error.message}`);
       }
 
-      console.log(`READ page 4..7: ${hex(page4)}`);
+      console.log(`FAST_READ page 4..11: ${hex(page4to11)}`);
+  console.log(`FAST_READ text: ${decodedText || "<no printable text>"}`);
       console.log("---");
 
       haltA(dev);
