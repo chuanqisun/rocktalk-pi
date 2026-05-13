@@ -14,7 +14,8 @@
 // Run:
 //   node rc522-read-tag.js
 
-const SPI = require("spi-device");
+/* @ts-ignore */
+import SPI from "spi-device";
 
 // -----------------------------------------------------------------------------
 // MFRC522 registers
