@@ -272,11 +272,13 @@ function readPagesRaw(dev, page) {
   const crc = calculateCRC(dev, frame);
   const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 30);
 
-  if (res.data.length !== 16) {
+  if (res.data.length !== 16 && res.data.length !== 18) {
     throw new Error(`READ ${page} returned ${res.data.length} bytes`);
   }
 
-  return res.data;
+  // Some MFRC522 configurations leave the tag's 2-byte CRC_A in the FIFO.
+  // NTAG READ payload is still the first 16 bytes.
+  return res.data.slice(0, 16);
 }
 
 function getVersion(dev) {
