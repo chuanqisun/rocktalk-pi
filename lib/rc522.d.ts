@@ -5,22 +5,24 @@ export interface Rc522Options {
   mode?: number;
   block?: number;
   blocks?: number[];
-  key?: number[] | Buffer;
   pollIntervalMs?: number;
+  writeAttempts?: number;
+  writeSettleMs?: number;
+  interCommandSettleMs?: number;
 }
 
 export interface Rc522OperationOptions {
   block?: number;
-  key?: number[] | Buffer;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  writeAttempts?: number;
 }
 
 export interface Rc522TextOperationOptions {
   blocks?: number[];
-  key?: number[] | Buffer;
   pollIntervalMs?: number;
   timeoutMs?: number;
+  writeAttempts?: number;
 }
 
 export interface Rc522BlockResult {
