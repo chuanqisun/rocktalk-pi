@@ -47,6 +47,7 @@ const PICC_ANTICOLL_CL2 = 0x95;
 const PICC_SELECT_CL1 = 0x93;
 const PICC_SELECT_CL2 = 0x95;
 const PICC_READ = 0x30;
+const PICC_COMPATIBILITY_WRITE = 0xa0;
 const PICC_WRITE = 0xa2;
 const PICC_GET_VERSION = 0x60;
 const PICC_HALT = 0x50;
@@ -56,8 +57,10 @@ const NTAG_GET_VERSION_RESPONSE_LENGTH = 8;
 const TEXT_PAYLOAD = "hello-world-123";
 const USER_START_PAGE = 4;
 const WRITE_ATTEMPTS = 5;
-const WRITE_SETTLE_MS = 8;
+const WRITE_SETTLE_MS = 12;
 const INTER_COMMAND_SETTLE_MS = 3;
+const WRITE_ACK_TIMEOUT_MS = 20;
+const WRITE_RECOVERY_RESELECT_ATTEMPTS = 3;
 const DEBUG = process.env.NTAG_DEBUG === "1";
 
 // SPI address format:
@@ -163,8 +166,8 @@ function antennaOn(dev) {
 function init(dev) {
   reset(dev);
 
-  // Use a longer RF timeout so the debug script behaves more like the working
-  // NTAG213 reader implementation in lib/rc522-ntag213.js.
+  // Use a longer RF timeout so short tag response timing is still captured
+  // reliably when the field coupling is marginal.
   writeReg(dev, TModeReg, 0x8d);
   writeReg(dev, TPrescalerReg, 0x3e);
   writeReg(dev, TReloadRegL, 0xe8);
@@ -403,24 +406,139 @@ function readPages(dev, startPage, pageCount) {
   return out;
 }
 
-function writePageOnce(dev, page, data4) {
-  writeReg(dev, BitFramingReg, 0x00);
-
-  const frame = [PICC_WRITE, page, data4[0], data4[1], data4[2], data4[3]];
-  const crc = calculateCRC(dev, frame);
-  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 60);
-
+function decodeAck(res, label) {
   if (res.bits !== 4 || res.data.length < 1) {
-    return { ok: false, reason: `Bad ACK frame (${res.bits} bits)` };
+    return { ok: false, reason: `${label} bad ACK frame (${res.bits} bits)` };
   }
 
   const ack = res.data[0] & 0x0f;
 
   if (ack !== 0x0a) {
-    return { ok: false, reason: `Tag returned NAK 0x${ack.toString(16)}` };
+    return { ok: false, reason: `${label} tag returned NAK 0x${ack.toString(16)}` };
   }
 
   return { ok: true };
+}
+
+function writePageOnce(dev, page, data4) {
+  writeReg(dev, BitFramingReg, 0x00);
+
+  const frame = [PICC_WRITE, page, data4[0], data4[1], data4[2], data4[3]];
+  const crc = calculateCRC(dev, frame);
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, WRITE_ACK_TIMEOUT_MS);
+
+  return decodeAck(res, `WRITE ${page}`);
+}
+
+function compatibilityWritePageOnce(dev, page, data4) {
+  writeReg(dev, BitFramingReg, 0x00);
+
+  const requestFrame = [PICC_COMPATIBILITY_WRITE, page];
+  const requestCrc = calculateCRC(dev, requestFrame);
+  const requestRes = transceive(dev, [...requestFrame, requestCrc[0], requestCrc[1]], 0x00, WRITE_ACK_TIMEOUT_MS);
+  const requestAck = decodeAck(requestRes, `COMPATIBILITY_WRITE ${page} part 1`);
+
+  if (!requestAck.ok) {
+    return requestAck;
+  }
+
+  const paddedData = Buffer.alloc(16, 0x00);
+  Buffer.from(data4).copy(paddedData, 0, 0, 4);
+
+  const dataFrame = [...paddedData];
+  const dataCrc = calculateCRC(dev, dataFrame);
+  const dataRes = transceive(dev, [...dataFrame, dataCrc[0], dataCrc[1]], 0x00, WRITE_ACK_TIMEOUT_MS);
+
+  return decodeAck(dataRes, `COMPATIBILITY_WRITE ${page} part 2`);
+}
+
+function verifyPageData(dev, page, data4) {
+  return arraysEqual(readPage(dev, page), [...data4]);
+}
+
+function recoverCard(dev, uid, attempts = WRITE_RECOVERY_RESELECT_ATTEMPTS) {
+  let lastError = new Error("Unable to wake NTAG213");
+
+  for (let attempt = 0; attempt < attempts; attempt += 1) {
+    try {
+      const card = readCard(dev, PICC_WUPA);
+
+      if (uid && !arraysEqual(card.uid, uid)) {
+        throw new Error("Different NTAG213 tag detected during write recovery");
+      }
+
+      return card;
+    } catch (error) {
+      lastError = error;
+      sleepMs(INTER_COMMAND_SETTLE_MS + attempt * 3);
+    }
+  }
+
+  throw lastError;
+}
+
+function verifyPageAfterWrite(dev, page, data4, uid) {
+  sleepMs(WRITE_SETTLE_MS);
+
+  try {
+    if (verifyPageData(dev, page, data4)) {
+      return { ok: true };
+    }
+  } catch (error) {
+    if (error.debugState) {
+      debugLog(`Direct verify failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+    }
+  }
+
+  try {
+    recoverCard(dev, uid);
+    sleepMs(INTER_COMMAND_SETTLE_MS);
+
+    if (verifyPageData(dev, page, data4)) {
+      return { ok: true, recovered: true };
+    }
+
+    return { ok: false, reason: "Verification mismatch after wakeup" };
+  } catch (error) {
+    if (error.debugState) {
+      debugLog(`Wakeup verify failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+    }
+
+    return { ok: false, reason: error.message };
+  }
+}
+
+function writePageWithVerification(dev, page, data4, uid, methodName, writeFn) {
+  let writeReason = null;
+
+  try {
+    const result = writeFn(dev, page, data4);
+
+    if (!result.ok) {
+      writeReason = result.reason;
+    }
+  } catch (error) {
+    if (error.debugState) {
+      debugLog(`${methodName} command failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+    }
+
+    writeReason = error.message;
+  }
+
+  const verification = verifyPageAfterWrite(dev, page, data4, uid);
+
+  if (verification.ok) {
+    if (writeReason) {
+      debugLog(`${methodName} page=${page} committed despite missed ACK (${writeReason})`);
+    }
+
+    return { ok: true };
+  }
+
+  return {
+    ok: false,
+    reason: verification.reason || writeReason || `${methodName} failed`,
+  };
 }
 
 function writePageRobust(dev, page, data4, uid, attempts = WRITE_ATTEMPTS) {
@@ -429,74 +547,49 @@ function writePageRobust(dev, page, data4, uid, attempts = WRITE_ATTEMPTS) {
   for (let attempt = 0; attempt < attempts; attempt += 1) {
     debugLog(`Write attempt ${attempt + 1}/${attempts} page=${page} data=${hex([...data4])}`);
 
-    try {
-      const writeResult = writePageOnce(dev, page, data4);
+    const writeResult = writePageWithVerification(dev, page, data4, uid, "WRITE", writePageOnce);
 
-      if (writeResult.ok) {
-        sleepMs(WRITE_SETTLE_MS);
-
-        const verified = readPage(dev, page);
-
-        if (Buffer.from(verified).equals(Buffer.from(data4))) {
-          return;
-        }
-
-        lastReason = "Verification mismatch";
-      } else {
-        lastReason = writeResult.reason;
-      }
-    } catch (error) {
-      if (error.debugState) {
-        debugLog(`Write command failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
-      }
-
-      lastReason = error.message;
+    if (writeResult.ok) {
+      return;
     }
 
-    // Some tags complete the EEPROM write even when the ACK frame is missed.
-    // Re-select and verify before spending another attempt.
-    sleepMs(WRITE_SETTLE_MS);
+    lastReason = writeResult.reason;
+    debugLog(`WRITE did not verify page=${page} reason=${lastReason}`);
 
-    try {
-      const recoveredCard = readCard(dev, PICC_WUPA);
+    const compatibilityResult = writePageWithVerification(
+      dev,
+      page,
+      data4,
+      uid,
+      "COMPATIBILITY_WRITE",
+      compatibilityWritePageOnce,
+    );
 
-      if (uid && !arraysEqual(recoveredCard.uid, uid)) {
-        throw new Error("Different NTAG213 tag detected during post-timeout verification");
-      }
-
-      const verified = readPage(dev, page);
-
-      if (Buffer.from(verified).equals(Buffer.from(data4))) {
-        debugLog(`Write verified after missed ACK on page=${page}`);
-        return;
-      }
-    } catch (error) {
-      if (error.debugState) {
-        debugLog(`Post-timeout verification failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
-      }
+    if (compatibilityResult.ok) {
+      return;
     }
 
-    sleepMs(8 + attempt * 5);
+    lastReason = compatibilityResult.reason;
+    debugLog(`COMPATIBILITY_WRITE did not verify page=${page} reason=${lastReason}`);
+
+    sleepMs(WRITE_SETTLE_MS + attempt * 5);
 
     try {
       haltA(dev);
-    } catch (_) {
-      // Ignore HALT failures during retry recovery.
+    } catch (error) {
+      if (error.debugState) {
+        debugLog(`Retry halt failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+      }
     }
 
-    sleepMs(2);
+    sleepMs(INTER_COMMAND_SETTLE_MS);
 
     try {
-      const card = readCard(dev, PICC_WUPA);
-
-      if (uid && !arraysEqual(card.uid, uid)) {
-        throw new Error("Different NTAG213 tag detected during write retry");
-      }
-
+      recoverCard(dev, uid);
       sleepMs(INTER_COMMAND_SETTLE_MS);
     } catch (error) {
       if (error.debugState) {
-        debugLog(`Retry recovery failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+        debugLog(`Retry wakeup failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
       }
 
       lastReason = error.message;
