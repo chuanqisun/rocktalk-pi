@@ -274,10 +274,7 @@ function readPagesRaw(dev, page) {
   const frame = [PICC_READ, page];
   const crc = calculateCRC(dev, frame);
   const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 30);
-  const expectedLengths = new Set([
-    NTAG_READ_RESPONSE_LENGTH,
-    NTAG_READ_RESPONSE_LENGTH + CRC_A_BYTE_LENGTH,
-  ]);
+  const expectedLengths = new Set([NTAG_READ_RESPONSE_LENGTH, NTAG_READ_RESPONSE_LENGTH + CRC_A_BYTE_LENGTH]);
 
   if (!expectedLengths.has(res.data.length)) {
     throw new Error(`READ ${page} returned ${res.data.length} bytes`);
@@ -291,10 +288,7 @@ function readPagesRaw(dev, page) {
 function getVersion(dev) {
   const crc = calculateCRC(dev, [PICC_GET_VERSION]);
   const res = transceive(dev, [PICC_GET_VERSION, crc[0], crc[1]], 0x00, 30);
-  const expectedLengths = new Set([
-    NTAG_GET_VERSION_RESPONSE_LENGTH,
-    NTAG_GET_VERSION_RESPONSE_LENGTH + CRC_A_BYTE_LENGTH,
-  ]);
+  const expectedLengths = new Set([NTAG_GET_VERSION_RESPONSE_LENGTH, NTAG_GET_VERSION_RESPONSE_LENGTH + CRC_A_BYTE_LENGTH]);
 
   if (!expectedLengths.has(res.data.length)) {
     throw new Error(`GET_VERSION returned ${res.data.length} bytes`);
