@@ -9,6 +9,7 @@ const SPEED_HZ = 1_000_000;
 const CommandReg = 0x01;
 const ComIEnReg = 0x02;
 const ComIrqReg = 0x04;
+const DivIrqReg = 0x05;
 const ErrorReg = 0x06;
 const FIFODataReg = 0x09;
 const FIFOLevelReg = 0x0a;
@@ -19,6 +20,8 @@ const TxModeReg = 0x12;
 const RxModeReg = 0x13;
 const TxControlReg = 0x14;
 const TxASKReg = 0x15;
+const CRCResultRegH = 0x21;
+const CRCResultRegL = 0x22;
 const TModeReg = 0x2a;
 const TPrescalerReg = 0x2b;
 const TReloadRegH = 0x2c;
@@ -28,12 +31,18 @@ const VersionReg = 0x37;
 // MFRC522 commands
 const PCD_IDLE = 0x00;
 const PCD_TRANSCEIVE = 0x0c;
+const PCD_CALCCRC = 0x03;
 const PCD_SOFTRESET = 0x0f;
 
 // PICC commands
 const PICC_REQA = 0x26;
 const PICC_ANTICOLL_CL1 = 0x93;
 const PICC_ANTICOLL_CL2 = 0x95;
+const PICC_SELECT_CL1 = 0x93;
+const PICC_SELECT_CL2 = 0x95;
+const PICC_READ = 0x30;
+const PICC_GET_VERSION = 0x60;
+const PICC_HALT = 0x50;
 
 // SPI address format:
 // write: ((reg << 1) & 0x7E)
@@ -95,14 +104,19 @@ function antennaOn(dev) {
 function init(dev) {
   reset(dev);
 
-  // Timer settings commonly used by MFRC522 examples
+  // Use a longer RF timeout so the debug script behaves more like the working
+  // NTAG213 reader implementation in lib/rc522-ntag213.js.
   writeReg(dev, TModeReg, 0x8d);
   writeReg(dev, TPrescalerReg, 0x3e);
-  writeReg(dev, TReloadRegL, 30);
-  writeReg(dev, TReloadRegH, 0);
+  writeReg(dev, TReloadRegL, 0xe8);
+  writeReg(dev, TReloadRegH, 0x03);
 
   writeReg(dev, TxASKReg, 0x40);
   writeReg(dev, ModeReg, 0x3d);
+
+  // Keep 106 kbps defaults explicit while debugging.
+  writeReg(dev, TxModeReg, 0x00);
+  writeReg(dev, RxModeReg, 0x00);
 
   antennaOn(dev);
 }
@@ -111,9 +125,13 @@ function calculateBcc(bytes) {
   return bytes.reduce((a, b) => a ^ b, 0);
 }
 
-function transceive(dev, data, validBits = 0) {
+function transceive(dev, data, validBits = 0, timeoutMs = 50) {
+  const irqEn = 0x77;
+  const waitIrq = 0x30;
+
+  writeReg(dev, ComIEnReg, irqEn | 0x80);
   writeReg(dev, CommandReg, PCD_IDLE);
-  writeReg(dev, ComIrqReg, 0x7f); // clear IRQ flags
+  clearBitMask(dev, ComIrqReg, 0x80);
   setBitMask(dev, FIFOLevelReg, 0x80); // flush FIFO
 
   for (const b of data) {
@@ -124,33 +142,79 @@ function transceive(dev, data, validBits = 0) {
   writeReg(dev, CommandReg, PCD_TRANSCEIVE);
   setBitMask(dev, BitFramingReg, 0x80); // StartSend
 
-  let i = 2000;
-  let irq;
-  do {
+  const deadline = Date.now() + timeoutMs;
+  let irq = 0;
+  let timedOut = false;
+
+  while (true) {
     irq = readReg(dev, ComIrqReg);
-    i--;
-  } while (i && !(irq & 0x30)); // RxIRq or IdleIRq
+
+    if (irq & waitIrq) {
+      break;
+    }
+
+    if (irq & 0x01 || Date.now() >= deadline) {
+      timedOut = true;
+      break;
+    }
+  }
 
   clearBitMask(dev, BitFramingReg, 0x80);
 
-  if (i === 0) {
+  if (timedOut) {
+    writeReg(dev, CommandReg, PCD_IDLE);
     throw new Error("Timeout waiting for tag");
   }
 
-  const error = readReg(dev, ErrorReg);
-  if (error & 0x13) {
-    throw new Error(`MFRC522 error: 0x${error.toString(16)}`);
+  let len = readReg(dev, FIFOLevelReg);
+  const lastBits = readReg(dev, ControlReg) & 0x07;
+  const bits = lastBits ? (len - 1) * 8 + lastBits : len * 8;
+  const out = [];
+
+  if (len === 0) {
+    len = 1;
   }
 
-  const len = readReg(dev, FIFOLevelReg);
-  const lastBits = readReg(dev, ControlReg) & 0x07;
-  const out = [];
+  if (len > 64) {
+    len = 64;
+  }
 
   for (let j = 0; j < len; j++) {
     out.push(readReg(dev, FIFODataReg));
   }
 
-  return { data: out, bits: lastBits ? (len - 1) * 8 + lastBits : len * 8 };
+  const error = readReg(dev, ErrorReg);
+  const isFourBitResponse = bits === 4;
+  const fatalMask = isFourBitResponse ? 0x1a : 0x1b;
+
+  if (error & fatalMask) {
+    throw new Error(`MFRC522 error: 0x${error.toString(16)}`);
+  }
+
+  return { data: out, bits };
+}
+
+function calculateCRC(dev, data) {
+  writeReg(dev, CommandReg, PCD_IDLE);
+  clearBitMask(dev, DivIrqReg, 0x04);
+  setBitMask(dev, FIFOLevelReg, 0x80);
+
+  for (const b of data) {
+    writeReg(dev, FIFODataReg, b);
+  }
+
+  writeReg(dev, CommandReg, PCD_CALCCRC);
+
+  const deadline = Date.now() + 20;
+  while (Date.now() < deadline) {
+    if (readReg(dev, DivIrqReg) & 0x04) {
+      writeReg(dev, CommandReg, PCD_IDLE);
+      return [readReg(dev, CRCResultRegL), readReg(dev, CRCResultRegH)];
+    }
+  }
+
+  writeReg(dev, CommandReg, PCD_IDLE);
+  throw new Error("Timed out calculating CRC");
 }
 
 function requestA(dev) {
@@ -180,23 +244,83 @@ function anticollision(dev, cascadeCmd) {
   return block;
 }
 
-function readUid(dev) {
-  requestA(dev);
+function selectCascade(dev, cascadeCmd, fiveBytes) {
+  const frame = [cascadeCmd, 0x70, ...fiveBytes];
+  const crc = calculateCRC(dev, frame);
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 25);
+
+  if (res.bits !== 0x18 || res.data.length < 1) {
+    throw new Error(`SELECT failed on cascade 0x${cascadeCmd.toString(16)} (${res.bits} bits)`);
+  }
+
+  return res.data[0];
+}
+
+function haltA(dev) {
+  const frame = [PICC_HALT, 0x00];
+  const crc = calculateCRC(dev, frame);
+
+  try {
+    transceive(dev, [...frame, crc[0], crc[1]], 0x00, 10);
+  } catch (_) {
+    // HALT commonly returns no data; ignore while debugging.
+  }
+}
+
+function readPagesRaw(dev, page) {
+  const frame = [PICC_READ, page];
+  const crc = calculateCRC(dev, frame);
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 30);
+
+  if (res.data.length !== 16) {
+    throw new Error(`READ ${page} returned ${res.data.length} bytes`);
+  }
+
+  return res.data;
+}
+
+function getVersion(dev) {
+  const crc = calculateCRC(dev, [PICC_GET_VERSION]);
+  const res = transceive(dev, [PICC_GET_VERSION, crc[0], crc[1]], 0x00, 30);
+
+  if (res.data.length !== 8) {
+    throw new Error(`GET_VERSION returned ${res.data.length} bytes`);
+  }
+
+  return res.data;
+}
+
+function readCard(dev) {
+  const atqa = requestA(dev).data;
 
   const cl1 = anticollision(dev, PICC_ANTICOLL_CL1);
+  const sak1 = selectCascade(dev, PICC_SELECT_CL1, cl1);
 
   // 7-byte UID uses cascade tag 0x88 in CL1
-  if (cl1[0] === 0x88) {
+  if (sak1 & 0x04) {
+    if (cl1[0] !== 0x88) {
+      throw new Error("Cascade bit set in SAK1 but CT marker missing in CL1 response");
+    }
+
     const uid0to2 = cl1.slice(1, 4);
 
     const cl2 = anticollision(dev, PICC_ANTICOLL_CL2);
+    const sak2 = selectCascade(dev, PICC_SELECT_CL2, cl2);
     const uid3to6 = cl2.slice(0, 4);
 
-    return uid0to2.concat(uid3to6);
+    return {
+      atqa,
+      uid: uid0to2.concat(uid3to6),
+      sak: sak2,
+    };
   }
 
   // 4-byte UID
-  return cl1.slice(0, 4);
+  return {
+    atqa,
+    uid: cl1.slice(0, 4),
+    sak: sak1,
+  };
 }
 
 function hex(bytes) {
@@ -214,15 +338,42 @@ try {
   const version = readReg(dev, VersionReg);
   console.log(`MFRC522 VersionReg: 0x${version.toString(16).padStart(2, "0")}`);
 
+  if (version === 0x00 || version === 0xff) {
+    throw new Error("RC522 did not respond correctly over SPI");
+  }
+
   console.log("Place NTAG213 near the reader...");
+
+  let lastStatus = "";
 
   while (true) {
     try {
-      const uid = readUid(dev);
-      console.log(`NTAG UID: ${hex(uid)}`);
+      const card = readCard(dev);
+      const page4 = readPagesRaw(dev, 4);
+
+      console.log(`ATQA: ${hex(card.atqa)}`);
+      console.log(`SAK: 0x${card.sak.toString(16).padStart(2, "0")}`);
+      console.log(`NTAG UID: ${hex(card.uid)}`);
+
+      try {
+        const versionBytes = getVersion(dev);
+        console.log(`GET_VERSION: ${hex(versionBytes)}`);
+      } catch (error) {
+        console.log(`GET_VERSION failed: ${error.message}`);
+      }
+
+      console.log(`READ page 4..7: ${hex(page4)}`);
+      console.log("---");
+
+      haltA(dev);
+      lastStatus = "";
       sleepMs(1000);
-    } catch (_) {
-      // No tag present or transient read error.
+    } catch (error) {
+      if (error.message !== lastStatus) {
+        console.log(`Waiting: ${error.message}`);
+        lastStatus = error.message;
+      }
+
       sleepMs(100);
     }
   }
