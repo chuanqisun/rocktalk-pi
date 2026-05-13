@@ -6,12 +6,23 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
 import AudioPlayer from "./lib/audio-player.js";
-import Rc522 from "./lib/rc522-mifare.js";
+import Rc522 from "./lib/rc522-ntag213.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
 const READER_POLL_INTERVAL_MS = 80;
-const reader = new Rc522({ block: 8, pollIntervalMs: READER_POLL_INTERVAL_MS });
+
+// NTAG213 user memory pages are 4..39. We mirror setup.js: 12 contiguous user
+// pages starting at page 4 = 48 bytes of text capacity.
+const TEXT_START_PAGE = 4;
+const TEXT_PAGE_COUNT = 12;
+const TEXT_PAGES = Array.from({ length: TEXT_PAGE_COUNT }, (_, index) => TEXT_START_PAGE + index);
+
+const reader = new Rc522({
+  block: TEXT_START_PAGE,
+  blocks: TEXT_PAGES,
+  pollIntervalMs: READER_POLL_INTERVAL_MS,
+});
 
 function createStartEvent(uid, data) {
   return /** @type {{ type: "start", uid: string, data: string }} */ ({ type: "start", uid, data });
@@ -95,7 +106,7 @@ async function promptForAudioDevice() {
 async function* infiniteRead() {
   while (true) {
     try {
-      yield reader.readTextAsync();
+      yield reader.readTextAsync({ blocks: TEXT_PAGES });
     } catch (error) {
       // The chip might be approaching or leaving the reader's field. It's not a fatal error
     }
