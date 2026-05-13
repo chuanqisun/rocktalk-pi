@@ -4,19 +4,13 @@ import { dirname, resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { BehaviorSubject, debounceTime, filter, from, map, merge, share, tap, withLatestFrom } from "rxjs";
-import Rc522 from "./lib/rc522-ntag213.js";
+import Rc522 from "./lib/rc522-mifare.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TRACKS_DIR = resolve(__dirname, "tracks");
-
-// NTAG213 user memory pages are 4..39 (36 pages, 4 bytes each = 144 bytes).
-// We use the first 12 user pages = 48 bytes of text capacity.
-const TEXT_START_PAGE = 4;
-const TEXT_PAGE_COUNT = 12;
-const TEXT_PAGES = Array.from({ length: TEXT_PAGE_COUNT }, (_, index) => TEXT_START_PAGE + index);
-
+const TEXT_BLOCKS = [8, 9, 10];
 const SCAN_TIMEOUT_MS = 250;
-const reader = new Rc522({ blocks: TEXT_PAGES, pollIntervalMs: 80 });
+const reader = new Rc522({ blocks: TEXT_BLOCKS, pollIntervalMs: 80 });
 const CANCELLED = Symbol("cancelled");
 const BACK_TO_MENU = Symbol("back-to-menu");
 
@@ -54,7 +48,7 @@ async function listTracks() {
 async function* infiniteReadText(signal) {
   while (!signal.aborted) {
     try {
-      yield reader.readTextAsync({ blocks: TEXT_PAGES, timeoutMs: SCAN_TIMEOUT_MS });
+      yield reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs: SCAN_TIMEOUT_MS });
     } catch (error) {
       if (signal.aborted) {
         return;
@@ -151,8 +145,8 @@ async function waitForCardAction(message, action) {
 async function programCard(text) {
   try {
     const written = await waitForCardAction(`Tap and hold a rock to write ${formatData(text)}.`, async ({ timeoutMs }) => {
-      const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_PAGES, timeoutMs });
-      const readResult = await reader.readTextAsync({ blocks: TEXT_PAGES, timeoutMs });
+      const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs });
+      const readResult = await reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs });
 
       if (readResult.uid !== writeResult.uid || readResult.text !== text) {
         throw new Error(`Validation failed. Expected ${writeResult.uid} -> ${formatData(text)}, received ${readResult.uid} -> ${formatData(readResult.text)}.`);
