@@ -11,10 +11,12 @@ const ComIEnReg = 0x02;
 const ComIrqReg = 0x04;
 const DivIrqReg = 0x05;
 const ErrorReg = 0x06;
+const Status2Reg = 0x08;
 const FIFODataReg = 0x09;
 const FIFOLevelReg = 0x0a;
 const ControlReg = 0x0c;
 const BitFramingReg = 0x0d;
+const CollReg = 0x0e;
 const ModeReg = 0x11;
 const TxModeReg = 0x12;
 const RxModeReg = 0x13;
@@ -26,6 +28,8 @@ const TModeReg = 0x2a;
 const TPrescalerReg = 0x2b;
 const TReloadRegH = 0x2c;
 const TReloadRegL = 0x2d;
+const TCounterValueRegH = 0x2e;
+const TCounterValueRegL = 0x2f;
 const VersionReg = 0x37;
 
 // MFRC522 commands
@@ -36,6 +40,7 @@ const PCD_SOFTRESET = 0x0f;
 
 // PICC commands
 const PICC_REQA = 0x26;
+const PICC_WUPA = 0x52;
 const PICC_ANTICOLL_CL1 = 0x93;
 const PICC_ANTICOLL_CL2 = 0x95;
 const PICC_SELECT_CL1 = 0x93;
@@ -49,6 +54,8 @@ const TEXT_PAYLOAD = "hello-world-123";
 const USER_START_PAGE = 4;
 const WRITE_ATTEMPTS = 5;
 const WRITE_SETTLE_MS = 8;
+const INTER_COMMAND_SETTLE_MS = 3;
+const DEBUG = process.env.NTAG_DEBUG === "1";
 
 // SPI address format:
 // write: ((reg << 1) & 0x7E)
@@ -91,6 +98,49 @@ function clearBitMask(dev, reg, mask) {
   writeReg(dev, reg, readReg(dev, reg) & ~mask);
 }
 
+function readDebugState(dev) {
+  return {
+    command: readReg(dev, CommandReg),
+    comIrq: readReg(dev, ComIrqReg),
+    divIrq: readReg(dev, DivIrqReg),
+    error: readReg(dev, ErrorReg),
+    status2: readReg(dev, Status2Reg),
+    fifoLevel: readReg(dev, FIFOLevelReg),
+    control: readReg(dev, ControlReg),
+    bitFraming: readReg(dev, BitFramingReg),
+    coll: readReg(dev, CollReg),
+    timer: (readReg(dev, TCounterValueRegH) << 8) | readReg(dev, TCounterValueRegL),
+  };
+}
+
+function formatDebugState(state) {
+  return Object.entries(state)
+    .map(([key, value]) => `${key}=0x${value.toString(16).padStart(2, "0")}`)
+    .join(" ");
+}
+
+function debugLog(message) {
+  if (DEBUG) {
+    console.log(`[debug] ${message}`);
+  }
+}
+
+/**
+ * @typedef {ReturnType<typeof readDebugState>} DebugState
+ */
+
+/**
+ * @typedef {Error & { debugState: DebugState }} DeviceError
+ */
+
+function makeDeviceError(message, dev) {
+  /** @type {DeviceError} */
+  const error = Object.assign(new Error(message), {
+    debugState: readDebugState(dev),
+  });
+  return error;
+}
+
 function sleepMs(ms) {
   Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
 }
@@ -123,6 +173,7 @@ function init(dev) {
   // Keep 106 kbps defaults explicit while debugging.
   writeReg(dev, TxModeReg, 0x00);
   writeReg(dev, RxModeReg, 0x00);
+  writeReg(dev, CollReg, 0x80);
 
   antennaOn(dev);
 }
@@ -151,7 +202,7 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
 
   writeReg(dev, ComIEnReg, irqEn | 0x80);
   writeReg(dev, CommandReg, PCD_IDLE);
-  clearBitMask(dev, ComIrqReg, 0x80);
+  writeReg(dev, ComIrqReg, 0x7f);
   setBitMask(dev, FIFOLevelReg, 0x80); // flush FIFO
 
   for (const b of data) {
@@ -183,7 +234,14 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
 
   if (timedOut) {
     writeReg(dev, CommandReg, PCD_IDLE);
-    throw new Error("Timeout waiting for tag");
+
+    const error = makeDeviceError("Timeout waiting for tag", dev);
+
+    if (DEBUG) {
+      debugLog(`Transceive timeout data=${hex(data)} bits=${validBits} ${formatDebugState(error.debugState)}`);
+    }
+
+    throw error;
   }
 
   let len = readReg(dev, FIFOLevelReg);
@@ -208,7 +266,13 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
   const fatalMask = isFourBitResponse ? 0x1a : 0x1b;
 
   if (error & fatalMask) {
-    throw new Error(`MFRC522 error: 0x${error.toString(16)}`);
+    const deviceError = makeDeviceError(`MFRC522 error: 0x${error.toString(16)}`, dev);
+
+    if (DEBUG) {
+      debugLog(`Transceive error data=${hex(data)} bits=${validBits} ${formatDebugState(deviceError.debugState)}`);
+    }
+
+    throw deviceError;
   }
 
   return { data: out, bits };
@@ -216,7 +280,7 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
 
 function calculateCRC(dev, data) {
   writeReg(dev, CommandReg, PCD_IDLE);
-  clearBitMask(dev, DivIrqReg, 0x04);
+  writeReg(dev, DivIrqReg, 0x04);
   setBitMask(dev, FIFOLevelReg, 0x80);
 
   for (const b of data) {
@@ -234,13 +298,28 @@ function calculateCRC(dev, data) {
   }
 
   writeReg(dev, CommandReg, PCD_IDLE);
-  throw new Error("Timed out calculating CRC");
+
+  const error = makeDeviceError("Timed out calculating CRC", dev);
+
+  if (DEBUG) {
+    debugLog(`CRC timeout data=${hex(data)} ${formatDebugState(error.debugState)}`);
+  }
+
+  throw error;
+}
+
+function request(dev, command) {
+  // REQA/WUPA are 7 bits, not a full byte
+  writeReg(dev, BitFramingReg, 0x07);
+  return transceive(dev, [command], 0x07);
 }
 
 function requestA(dev) {
-  // REQA is 7 bits, not a full byte
-  writeReg(dev, BitFramingReg, 0x07);
-  return transceive(dev, [PICC_REQA], 0x07);
+  return request(dev, PICC_REQA);
+}
+
+function wakeupA(dev) {
+  return request(dev, PICC_WUPA);
 }
 
 function anticollision(dev, cascadeCmd) {
@@ -314,6 +393,8 @@ function readPages(dev, startPage, pageCount) {
 }
 
 function writePageOnce(dev, page, data4) {
+  writeReg(dev, BitFramingReg, 0x00);
+
   const frame = [PICC_WRITE, page, data4[0], data4[1], data4[2], data4[3]];
   const crc = calculateCRC(dev, frame);
   const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 60);
@@ -335,6 +416,8 @@ function writePageRobust(dev, page, data4, uid, attempts = WRITE_ATTEMPTS) {
   let lastReason = "Unknown write failure";
 
   for (let attempt = 0; attempt < attempts; attempt += 1) {
+    debugLog(`Write attempt ${attempt + 1}/${attempts} page=${page} data=${hex([...data4])}`);
+
     try {
       const writeResult = writePageOnce(dev, page, data4);
 
@@ -352,7 +435,34 @@ function writePageRobust(dev, page, data4, uid, attempts = WRITE_ATTEMPTS) {
         lastReason = writeResult.reason;
       }
     } catch (error) {
+      if (error.debugState) {
+        debugLog(`Write command failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+      }
+
       lastReason = error.message;
+    }
+
+    // Some tags complete the EEPROM write even when the ACK frame is missed.
+    // Re-select and verify before spending another attempt.
+    sleepMs(WRITE_SETTLE_MS);
+
+    try {
+      const recoveredCard = readCard(dev, PICC_WUPA);
+
+      if (uid && !arraysEqual(recoveredCard.uid, uid)) {
+        throw new Error("Different NTAG213 tag detected during post-timeout verification");
+      }
+
+      const verified = readPage(dev, page);
+
+      if (Buffer.from(verified).equals(Buffer.from(data4))) {
+        debugLog(`Write verified after missed ACK on page=${page}`);
+        return;
+      }
+    } catch (error) {
+      if (error.debugState) {
+        debugLog(`Post-timeout verification failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+      }
     }
 
     sleepMs(8 + attempt * 5);
@@ -366,12 +476,18 @@ function writePageRobust(dev, page, data4, uid, attempts = WRITE_ATTEMPTS) {
     sleepMs(2);
 
     try {
-      const card = readCard(dev);
+      const card = readCard(dev, PICC_WUPA);
 
       if (uid && !arraysEqual(card.uid, uid)) {
         throw new Error("Different NTAG213 tag detected during write retry");
       }
+
+      sleepMs(INTER_COMMAND_SETTLE_MS);
     } catch (error) {
+      if (error.debugState) {
+        debugLog(`Retry recovery failed page=${page} reason=${error.message} ${formatDebugState(error.debugState)}`);
+      }
+
       lastReason = error.message;
     }
   }
@@ -394,6 +510,8 @@ function buildPayloadPages(text) {
 
 function writeText(dev, card, startPage, text) {
   const { payload, pageCount } = buildPayloadPages(text);
+
+  sleepMs(INTER_COMMAND_SETTLE_MS);
 
   for (let index = 0; index < pageCount; index += 1) {
     const page = startPage + index;
@@ -425,8 +543,8 @@ function getVersion(dev) {
   return res.data;
 }
 
-function readCard(dev) {
-  const atqa = requestA(dev).data;
+function readCard(dev, requestCommand = PICC_WUPA) {
+  const atqa = request(dev, requestCommand).data;
 
   const cl1 = anticollision(dev, PICC_ANTICOLL_CL1);
   const sak1 = selectCascade(dev, PICC_SELECT_CL1, cl1);
@@ -483,7 +601,7 @@ try {
 
   while (true) {
     try {
-      const card = readCard(dev);
+      const card = readCard(dev, PICC_WUPA);
       const writeResult = writeText(dev, card, USER_START_PAGE, TEXT_PAYLOAD);
 
       console.log(`ATQA: ${hex(card.atqa)}`);
