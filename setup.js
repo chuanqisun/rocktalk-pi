@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { BehaviorSubject, debounceTime, filter, from, map, merge, share, tap, withLatestFrom } from "rxjs";
-import Rc522 from "./lib/rc522.js";
+import Rc522 from "./lib/rc522-mifare.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TRACKS_DIR = resolve(__dirname, "tracks");

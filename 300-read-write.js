@@ -1,4 +1,4 @@
-import Rc522 from "./lib/rc522.js";
+import Rc522 from "./lib/rc522-mifare.js";
 
 const reader = new Rc522({ block: 8 });
 const args = process.argv.slice(2);
