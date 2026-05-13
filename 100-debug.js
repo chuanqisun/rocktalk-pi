@@ -1,4 +1,5 @@
-const spi = require("spi-device");
+/* @ts-ignore */
+import spi from "spi-device";
 
 const bus = 0;
 const deviceNumber = 0;
