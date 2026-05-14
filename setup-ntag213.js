@@ -195,9 +195,6 @@ async function runAssignFlow() {
       return;
     }
 
-    // clear data first
-    await programCard("");
-
     await programCard(selected);
   }
 }
