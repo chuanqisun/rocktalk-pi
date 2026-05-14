@@ -54,8 +54,9 @@ const PICC_HALT = 0x50;
 const NTAG_READ_RESPONSE_LENGTH = 16;
 const NTAG_GET_VERSION_RESPONSE_LENGTH = 8;
 
-const TEXT_PAYLOAD = "hello-world-123";
 const USER_START_PAGE = 4;
+const USER_PAGE_COUNT = 8;
+const USER_PAYLOAD_BYTE_LENGTH = USER_PAGE_COUNT * 4;
 const WRITE_ATTEMPTS = 5;
 const WRITE_SETTLE_MS = 12;
 const INTER_COMMAND_SETTLE_MS = 3;
@@ -581,19 +582,24 @@ function writeChunkRobust(dev, startPage, payload, uid, attempts = WRITE_ATTEMPT
 
 function buildPayloadPages(text) {
   const encoded = Buffer.from(text, "utf8");
-  const pageCount = Math.ceil(encoded.length / 4);
-  const payload = Buffer.alloc(pageCount * 4, 0x00);
+
+  if (encoded.length > USER_PAYLOAD_BYTE_LENGTH) {
+    throw new Error(`Payload exceeds ${USER_PAYLOAD_BYTE_LENGTH} bytes`);
+  }
+
+  const payload = Buffer.alloc(USER_PAYLOAD_BYTE_LENGTH, 0x00);
 
   encoded.copy(payload);
 
   return {
     payload,
-    pageCount,
+    pageCount: USER_PAGE_COUNT,
+    textByteLength: encoded.length,
   };
 }
 
 function writeText(dev, card, startPage, text) {
-  const { payload, pageCount } = buildPayloadPages(text);
+  const { payload, pageCount, textByteLength } = buildPayloadPages(text);
   const verifiedChunks = [];
 
   sleepMs(INTER_COMMAND_SETTLE_MS);
@@ -615,6 +621,7 @@ function writeText(dev, card, startPage, text) {
     payload,
     pageCount,
     verified,
+    textByteLength,
   };
 }
 
@@ -662,6 +669,25 @@ function hex(bytes) {
   return bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(":");
 }
 
+function getCliPayload() {
+  const payload = process.argv[2];
+
+  if (payload == null) {
+    return "";
+  }
+
+  const byteLength = Buffer.byteLength(payload, "utf8");
+
+  if (byteLength > USER_PAYLOAD_BYTE_LENGTH) {
+    console.error(`Payload must be ${USER_PAYLOAD_BYTE_LENGTH} bytes or fewer, received ${byteLength} bytes.`);
+    process.exit(1);
+  }
+
+  return payload;
+}
+
+const textPayload = getCliPayload();
+
 const dev = SPI.openSync(SPI_BUS, SPI_DEVICE, {
   mode: SPI.MODE0,
   maxSpeedHz: SPEED_HZ,
@@ -684,7 +710,7 @@ try {
   while (true) {
     try {
       const card = readCard(dev, PICC_WUPA);
-      const writeResult = writeText(dev, card, USER_START_PAGE, TEXT_PAYLOAD);
+      const writeResult = writeText(dev, card, USER_START_PAGE, textPayload);
 
       console.log(`ATQA: ${hex(card.atqa)}`);
       console.log(`SAK: 0x${card.sak.toString(16).padStart(2, "0")}`);
@@ -697,7 +723,12 @@ try {
         console.log(`GET_VERSION failed: ${error.message}`);
       }
 
-      console.log(`Wrote text: ${JSON.stringify(TEXT_PAYLOAD)}`);
+      if (writeResult.textByteLength === 0) {
+        console.log(`Cleared ${USER_PAYLOAD_BYTE_LENGTH} bytes across pages ${USER_START_PAGE}..${USER_START_PAGE + USER_PAGE_COUNT - 1}`);
+      } else {
+        console.log(`Wrote text: ${JSON.stringify(textPayload)} (${writeResult.textByteLength} bytes)`);
+      }
+
       console.log(`Wrote pages ${USER_START_PAGE}..${USER_START_PAGE + writeResult.pageCount - 1}: ${hex([...writeResult.verified])}`);
 
       haltA(dev);
