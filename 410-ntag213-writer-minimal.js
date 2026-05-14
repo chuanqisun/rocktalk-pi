@@ -3,7 +3,7 @@ import SPI from "spi-device";
 
 const SPI_BUS = 0;
 const SPI_DEVICE = 0;
-const SPEED_HZ = 500_000;
+const SPEED_HZ = 1_000_000;
 const CRC_A_BYTE_LENGTH = 2;
 
 // MFRC522 registers
@@ -46,8 +46,6 @@ const PICC_WRITE = 0xa2;
 const PICC_HALT = 0x50;
 
 // NTAG213 layout
-const NTAG213_USER_PAGE_START = 0x04;
-const NTAG213_USER_PAGE_END = 0x27;
 const NTAG213_TEXT_PAGE_START = 0x04;
 const NTAG213_TEXT_PAGE_COUNT = 8;
 const NTAG213_TEXT_PAGE_END = NTAG213_TEXT_PAGE_START + NTAG213_TEXT_PAGE_COUNT - 1;
