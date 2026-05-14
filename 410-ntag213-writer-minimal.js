@@ -42,21 +42,17 @@ const PICC_ANTICOLL_CL2 = 0x95;
 const PICC_SELECT_CL1 = 0x93;
 const PICC_SELECT_CL2 = 0x95;
 const PICC_READ = 0x30;
-const PICC_WRITE = 0xa2; // NTAG / Ultralight WRITE: 0xA2 + page + 4 data bytes
+const PICC_WRITE = 0xa2;
 const PICC_HALT = 0x50;
 
 // NTAG213 layout
-const NTAG213_USER_PAGE_START = 0x04; // first writable user page
-const NTAG213_USER_PAGE_END = 0x27; // last writable user page (39)
-const NTAG213_USER_BYTES = (NTAG213_USER_PAGE_END - NTAG213_USER_PAGE_START + 1) * 4; // 144 bytes
+const NTAG213_USER_PAGE_START = 0x04;
+const NTAG213_USER_PAGE_END = 0x27;
+const NTAG213_USER_BYTES = (NTAG213_USER_PAGE_END - NTAG213_USER_PAGE_START + 1) * 4;
 const NTAG_READ_RESPONSE_LENGTH = 16;
 
-// Tag ACK / NAK (4-bit responses on WRITE)
+// NTAG ACK / NAK
 const NTAG_ACK = 0x0a;
-
-// ---------------------------------------------------------------------------
-// Low-level SPI helpers (identical conventions to reader.js)
-// ---------------------------------------------------------------------------
 
 function writeReg(dev, reg, val) {
   const tx = Buffer.from([(reg << 1) & 0x7e, val]);
@@ -140,7 +136,7 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
   writeReg(dev, ComIEnReg, irqEn | 0x80);
   writeReg(dev, CommandReg, PCD_IDLE);
   clearBitMask(dev, ComIrqReg, 0x80);
-  setBitMask(dev, FIFOLevelReg, 0x80); // flush FIFO
+  setBitMask(dev, FIFOLevelReg, 0x80);
 
   for (const b of data) {
     writeReg(dev, FIFODataReg, b);
@@ -148,14 +144,13 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
 
   writeReg(dev, BitFramingReg, validBits & 0x07);
   writeReg(dev, CommandReg, PCD_TRANSCEIVE);
-  setBitMask(dev, BitFramingReg, 0x80); // StartSend
+  setBitMask(dev, BitFramingReg, 0x80);
 
   const deadline = Date.now() + timeoutMs;
-  let irq = 0;
   let timedOut = false;
 
   while (true) {
-    irq = readReg(dev, ComIrqReg);
+    const irq = readReg(dev, ComIrqReg);
 
     if (irq & waitIrq) {
       break;
@@ -225,10 +220,6 @@ function calculateCRC(dev, data) {
   throw new Error("Timed out calculating CRC");
 }
 
-// ---------------------------------------------------------------------------
-// ISO/IEC 14443-3 anticollision + select (same as reader.js)
-// ---------------------------------------------------------------------------
-
 function requestA(dev) {
   writeReg(dev, BitFramingReg, 0x07);
   return transceive(dev, [PICC_REQA], 0x07);
@@ -272,7 +263,7 @@ function haltA(dev) {
   try {
     transceive(dev, [...frame, crc[0], crc[1]], 0x00, 10);
   } catch (_) {
-    // HALT returns no data on success
+    // HALT usually returns no data.
   }
 }
 
@@ -298,14 +289,6 @@ function selectTag(dev) {
   return { atqa, uid: cl1.slice(0, 4), sak: sak1 };
 }
 
-// ---------------------------------------------------------------------------
-// NTAG WRITE (command 0xA2 + page + 4 data bytes + CRC_A)
-//
-// The tag answers with a single 4-bit ACK (0xA) on success, or a 4-bit NAK
-// (typically 0x0, 0x1, 0x4 or 0x5) on failure. The MFRC522 reports this as
-// a frame with `bits === 4`.
-// ---------------------------------------------------------------------------
-
 function writePageRaw(dev, page, fourBytes) {
   if (fourBytes.length !== 4) {
     throw new Error(`writePage expects 4 bytes, got ${fourBytes.length}`);
@@ -313,18 +296,38 @@ function writePageRaw(dev, page, fourBytes) {
 
   const frame = [PICC_WRITE, page, ...fourBytes];
   const crc = calculateCRC(dev, frame);
-  // NTAG WRITE has a relatively long internal programming time; give it
-  // headroom. The datasheet specs ~5 ms; 50 ms is conservative.
-  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 50);
+
+  // Increased timeout for clone/marginal NTAGs and EEPROM programming latency.
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 100);
 
   if (res.bits !== 4 || res.data.length < 1) {
-    throw new Error(`WRITE page ${page} returned an unexpected frame (${res.bits} bits, ${res.data.length} bytes)`);
+    throw new Error(`WRITE page ${page} returned unexpected frame (${res.bits} bits, ${res.data.length} bytes)`);
   }
 
   const ack = res.data[0] & 0x0f;
   if (ack !== NTAG_ACK) {
-    throw new Error(`WRITE page ${page} NAK 0x${ack.toString(16)} (tag rejected the write)`);
+    throw new Error(`WRITE page ${page} NAK 0x${ack.toString(16)}; tag rejected write`);
   }
+}
+
+function writePageWithRetry(dev, page, bytes, retries = 3) {
+  let lastErr;
+
+  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+    try {
+      writePageRaw(dev, page, bytes);
+      return;
+    } catch (error) {
+      lastErr = error;
+      console.log(`  write page 0x${page.toString(16).padStart(2, "0")} attempt ${attempt} failed: ${error.message}`);
+
+      if (attempt <= retries) {
+        sleepMs(10);
+      }
+    }
+  }
+
+  throw lastErr;
 }
 
 function readPageRaw(dev, page) {
@@ -337,73 +340,45 @@ function readPageRaw(dev, page) {
     throw new Error(`READ ${page} returned ${res.data.length} bytes`);
   }
 
-  // READ returns 4 pages starting at `page` (16 bytes). We only need
-  // the first page (the first 4 bytes).
   return res.data.slice(0, 4);
 }
-
-// ---------------------------------------------------------------------------
-// NDEF Text Record encoding
-//
-// We wrap the payload in:
-//   - NDEF Message TLV  (T=0x03, L=<len>, V=<NDEF message>, TLV terminator 0xFE)
-//   - A single short NDEF record:
-//       header  = 0xD1 (MB=1, ME=1, CF=0, SR=1, IL=0, TNF=0x01 well-known)
-//       typeLen = 0x01
-//       payLen  = <bytes>
-//       type    = 'T'
-//       payload = status byte (0x02 = UTF-8, lang length 2) + "en" + UTF-8 text
-// ---------------------------------------------------------------------------
 
 function encodeNdefText(text) {
   const lang = Buffer.from("en", "ascii");
   const textBytes = Buffer.from(text, "utf8");
-  const statusByte = lang.length & 0x3f; // bit7=0 => UTF-8
+  const statusByte = lang.length & 0x3f;
 
   const payload = Buffer.concat([Buffer.from([statusByte]), lang, textBytes]);
 
   if (payload.length > 0xff) {
-    // Could be implemented with non-short-record format, but NTAG213's
-    // 144 bytes of user memory can't fit that anyway.
     throw new Error("Text payload too long for short NDEF record");
   }
 
-  const record = Buffer.from([
-    0xd1, // MB=1 ME=1 SR=1 TNF=0x01 (well-known)
-    0x01, // type length
-    payload.length, // payload length
-    0x54, // type = 'T'
-    ...payload,
-  ]);
+  const record = Buffer.from([0xd1, 0x01, payload.length, 0x54, ...payload]);
 
   const ndefLength = record.length;
   if (ndefLength > 0xfe) {
     throw new Error("NDEF message too long for 1-byte TLV length");
   }
 
-  // TLV: 0x03 <len> <record> 0xFE
-  const tlv = Buffer.concat([Buffer.from([0x03, ndefLength]), record, Buffer.from([0xfe])]);
-
-  return tlv;
+  return Buffer.concat([Buffer.from([0x03, ndefLength]), record, Buffer.from([0xfe])]);
 }
 
 function chunkIntoPages(buf) {
   const pages = [];
+
   for (let i = 0; i < buf.length; i += 4) {
-    const page = Buffer.alloc(4, 0x00); // zero-pad the trailing partial page
+    const page = Buffer.alloc(4, 0x00);
     buf.copy(page, 0, i, Math.min(i + 4, buf.length));
     pages.push([page[0], page[1], page[2], page[3]]);
   }
+
   return pages;
 }
 
 function hex(bytes) {
   return bytes.map((b) => b.toString(16).padStart(2, "0").toUpperCase()).join(":");
 }
-
-// ---------------------------------------------------------------------------
-// Main
-// ---------------------------------------------------------------------------
 
 const text = process.argv[2];
 
@@ -415,7 +390,7 @@ if (typeof text !== "string" || text.length === 0) {
 const ndefBytes = encodeNdefText(text);
 
 if (ndefBytes.length > NTAG213_USER_BYTES) {
-  console.error(`Encoded NDEF message is ${ndefBytes.length} bytes, which exceeds the ` + `${NTAG213_USER_BYTES}-byte user memory of an NTAG213.`);
+  console.error(`Encoded NDEF message is ${ndefBytes.length} bytes, exceeds NTAG213 user memory of ${NTAG213_USER_BYTES} bytes.`);
   process.exit(1);
 }
 
@@ -441,26 +416,40 @@ try {
 
   console.log("Place NTAG213 near the reader...");
 
-  let lastStatus = "";
-
   while (true) {
     try {
       const card = selectTag(dev);
+
       console.log(`ATQA: ${hex(card.atqa)}`);
       console.log(`SAK : 0x${card.sak.toString(16).padStart(2, "0")}`);
       console.log(`UID : ${hex(card.uid)}`);
 
-      // Write each page sequentially.
-      for (let i = 0; i < pages.length; i++) {
-        const pageAddr = NTAG213_USER_PAGE_START + i;
-        if (pageAddr > NTAG213_USER_PAGE_END) {
-          throw new Error(`Refusing to write past user memory (page 0x${pageAddr.toString(16)})`);
-        }
-        writePageRaw(dev, pageAddr, pages[i]);
-        console.log(`  wrote page 0x${pageAddr.toString(16).padStart(2, "0")}: ${hex(pages[i])}`);
+      if (card.uid[0] !== 0x04) {
+        console.warn(
+          `Warning: UID does not start with 0x04 NXP manufacturer byte; got 0x${card.uid[0]
+            .toString(16)
+            .padStart(2, "0")}. This may be a clone tag or marginal anticollision read.`
+        );
       }
 
-      // Verify by reading the first page back.
+      // Let the tag/RF field settle after SELECT before EEPROM writes.
+      sleepMs(5);
+
+      for (let i = 0; i < pages.length; i++) {
+        const pageAddr = NTAG213_USER_PAGE_START + i;
+
+        if (pageAddr > NTAG213_USER_PAGE_END) {
+          throw new Error(`Refusing to write past NTAG213 user memory at page 0x${pageAddr.toString(16)}`);
+        }
+
+        writePageWithRetry(dev, pageAddr, pages[i], 3);
+
+        console.log(`  wrote page 0x${pageAddr.toString(16).padStart(2, "0")}: ${hex(pages[i])}`);
+
+        // Give EEPROM programming time before the next page write.
+        sleepMs(10);
+      }
+
       const verify = readPageRaw(dev, NTAG213_USER_PAGE_START);
       console.log(`Verify page 0x${NTAG213_USER_PAGE_START.toString(16)}: ${hex(verify)}`);
 
@@ -468,10 +457,8 @@ try {
       haltA(dev);
       break;
     } catch (error) {
-      if (error.message !== lastStatus) {
-        console.log(`Waiting: ${error.message}`);
-        lastStatus = error.message;
-      }
+      // Always log attempts; do not suppress repeated timeout messages.
+      console.log(`Attempt failed: ${error.message}`);
       sleepMs(150);
     }
   }
