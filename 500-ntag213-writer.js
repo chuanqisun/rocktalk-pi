@@ -62,7 +62,7 @@ const WRITE_SETTLE_MS = 12;
 const INTER_COMMAND_SETTLE_MS = 3;
 const VERIFY_POLL_MS = 8;
 const VERIFY_TIMEOUT_MS = 80;
-const WRITE_ACK_TIMEOUT_MS = 20;
+const WRITE_ACK_TIMEOUT_MS = 35;
 const WRITE_RECOVERY_RESELECT_ATTEMPTS = 3;
 const READ_CHUNK_PAGE_COUNT = 4;
 const DEBUG = true;
@@ -210,6 +210,8 @@ function arraysEqual(a, b) {
 function transceive(dev, data, validBits = 0, timeoutMs = 50) {
   const irqEn = 0x77;
   const waitIrq = 0x30;
+  const txIrq = 0x40;
+  const timerIrq = 0x01;
 
   writeReg(dev, ComIEnReg, irqEn | 0x80);
   writeReg(dev, CommandReg, PCD_IDLE);
@@ -235,7 +237,16 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
       break;
     }
 
-    if (irq & 0x01 || Date.now() >= deadline) {
+    if (irq & txIrq) {
+      const command = readReg(dev, CommandReg);
+      const fifoLevel = readReg(dev, FIFOLevelReg);
+
+      if (command === PCD_IDLE && fifoLevel === 0) {
+        break;
+      }
+    }
+
+    if (irq & timerIrq || Date.now() >= deadline) {
       timedOut = true;
       break;
     }
@@ -257,12 +268,9 @@ function transceive(dev, data, validBits = 0, timeoutMs = 50) {
 
   let len = readReg(dev, FIFOLevelReg);
   const lastBits = readReg(dev, ControlReg) & 0x07;
-  const bits = lastBits ? (len - 1) * 8 + lastBits : len * 8;
   const out = [];
 
-  if (len === 0) {
-    len = 1;
-  }
+  const bits = len === 0 ? 0 : lastBits ? (len - 1) * 8 + lastBits : len * 8;
 
   if (len > 64) {
     len = 64;
@@ -441,6 +449,9 @@ function writePageOnce(dev, page, data4) {
 
   const frame = [PICC_WRITE, page, data4[0], data4[1], data4[2], data4[3]];
   const crc = calculateCRC(dev, frame);
+  // The MFRC522 timer configuration above is about 25 ms, so the host-side
+  // deadline needs to stay above that or it can declare a timeout before the
+  // chip raises TimerIRq for a no-response write.
   const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, WRITE_ACK_TIMEOUT_MS);
 
   return decodeAck(res, `WRITE ${page}`);
