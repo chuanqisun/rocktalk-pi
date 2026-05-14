@@ -377,18 +377,16 @@ function writePageCloneFriendly(dev, page, bytes, maxAttempts = MAX_PAGE_WRITE_A
       }
 
       // Let marginal clone chips settle after SELECT before EEPROM operations.
-      sleepMs(25);
+      sleepMs(10);
 
       // Stability probe: if READ is not stable, WRITE is unlikely to work.
-      readPageRaw(dev, page);
-      sleepMs(15);
       readPageRaw(dev, page);
       sleepMs(15);
 
       writePageRaw(dev, page, bytes);
 
       // EEPROM programming guard time before verify / next command.
-      sleepMs(35);
+      sleepMs(15);
 
       const verify = readPageRaw(dev, page);
       if (!samePage(verify, bytes)) {
@@ -408,7 +406,6 @@ function writePageCloneFriendly(dev, page, bytes, maxAttempts = MAX_PAGE_WRITE_A
       } catch (_) {}
 
       rfFieldReset(dev, 100);
-      sleepMs(120);
     }
   }
 
