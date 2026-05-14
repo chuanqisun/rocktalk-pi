@@ -6,6 +6,12 @@
 > [!TIP]
 > Typical reboot time is 25 seconds
 
+## Add audio tracks
+
+- User mp3 audio format
+- Keep the filename as short as possible. Long filenames adds fragility to RFID read/write process
+- Mount the MicroSD card to your laptop, copy paste mp3 files into the /home/rocktalk/rocktalk-pi/tracks folder.
+
 ## Programming the RFID chips
 
 Ask the project developer for ssh password. Connect to dock via USB-C port, then ssh onto the device.
