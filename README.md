@@ -38,6 +38,7 @@ Use Raspberry Pi Imager to flash the latest Raspberry Pi OS Lite (64-bit) to you
 ### 1. Enable SSH over USB
 
 - [Full documentation for reference](https://www.raspberrypi.com/news/usb-gadget-mode-in-raspberry-pi-os-ssh-over-usb/)
+- The setup requires internet sharing from the host laptop to the Raspberry Pi. Windows and MacOS require additional setup. See the documentation for details.
 - After initial boot, use Raspberry Pi Connect to open a terminal over the WIFI. Then run the following commands to enable SSH over USB
 
 ```sh
