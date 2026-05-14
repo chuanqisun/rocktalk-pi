@@ -32,21 +32,6 @@ function getTextSizeBytes(value) {
   return Buffer.byteLength(value, "utf8");
 }
 
-function formatWriteAttempt(event) {
-  const page = `0x${event.page.toString(16).padStart(2, "0")}`;
-  const bytes = Buffer.from(event.bytes).toString("hex").toUpperCase().match(/.{1,2}/g)?.join(":") ?? "";
-
-  if (event.status === "retry") {
-    return `Write retry page ${page} attempt ${event.attempt} failed: ${event.error}`;
-  }
-
-  if (event.attempt > 1) {
-    return `Write retry page ${page} recovered on attempt ${event.attempt}: ${bytes}`;
-  }
-
-  return `Wrote page ${page}: ${bytes}`;
-}
-
 function cancelStep() {
   log.info("Step cancelled.");
 }
@@ -176,15 +161,7 @@ async function programCard(text) {
     }
 
     const written = await waitForCardAction(`Tap and hold a rock to write ${formatData(text)}.`, async ({ timeoutMs }) => {
-      const writeResult = await reader.writeTextAsync(text, {
-        blocks: TEXT_PAGES,
-        timeoutMs,
-        onWriteAttempt: (event) => {
-          if (event.status === "retry" || event.attempt > 1) {
-            log.info(formatWriteAttempt(event));
-          }
-        },
-      });
+      const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_PAGES, timeoutMs });
       const readResult = await reader.readTextAsync({ blocks: TEXT_PAGES, timeoutMs });
 
       if (readResult.uid !== writeResult.uid || readResult.text !== text) {

@@ -16,20 +16,11 @@ export interface Rc522Options {
   pollIntervalMs?: number;
 }
 
-export interface Rc522WriteAttemptEvent {
-  status: "retry" | "success";
-  page: number;
-  attempt: number;
-  bytes: number[];
-  error: string | null;
-}
-
 export interface Rc522OperationOptions {
   blocks?: number[];
   pollIntervalMs?: number;
   timeoutMs?: number;
   signal?: AbortSignal;
-  onWriteAttempt?: (event: Rc522WriteAttemptEvent) => void;
 }
 
 export default class Rc522 {
