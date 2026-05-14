@@ -21,7 +21,7 @@ const CANCELLED = Symbol("cancelled");
 const BACK_TO_MENU = Symbol("back-to-menu");
 
 function isTimeoutError(error) {
-  return error instanceof Error && error.message === "Timed out waiting for RFID tag";
+  return error instanceof Error && error.message.startsWith("Timed out waiting for RFID tag");
 }
 
 function formatData(value) {
