@@ -6,15 +6,12 @@ import { fileURLToPath } from "node:url";
 import { promisify } from "node:util";
 import { BehaviorSubject, concatMap, debounceTime, distinctUntilChanged, filter, from, map, merge, of, share, tap, withLatestFrom } from "rxjs";
 import AudioPlayer from "./lib/audio-player.js";
-import Rc522 from "./lib/rc522.js";
+import Rc522 from "./lib/rc522-mifare.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
-const TEXT_START_PAGE = 4;
-const TEXT_PAGE_COUNT = 8;
-const TEXT_PAGES = Array.from({ length: TEXT_PAGE_COUNT }, (_, index) => TEXT_START_PAGE + index);
 const READER_POLL_INTERVAL_MS = 80;
-const reader = new Rc522({ blocks: TEXT_PAGES, pollIntervalMs: READER_POLL_INTERVAL_MS });
+const reader = new Rc522({ block: 8, pollIntervalMs: READER_POLL_INTERVAL_MS });
 
 function createStartEvent(uid, data) {
   return /** @type {{ type: "start", uid: string, data: string }} */ ({ type: "start", uid, data });
@@ -74,10 +71,6 @@ function parseCliAudioDevice(argv) {
       throw new Error("Missing value for -a. Expected an ALSA device such as plughw:2,0.");
     }
 
-    if (value.toLowerCase() === "auto") {
-      return "";
-    }
-
     return value;
   }
 
@@ -86,18 +79,10 @@ function parseCliAudioDevice(argv) {
 
 async function promptForAudioDevice() {
   const devices = await getAudioDevices();
-  const options = [
-    {
-      value: "",
-      label: "Auto",
-      hint: "Use the audio player's fallback device stack",
-    },
-    ...devices,
-  ];
 
   const selected = await select({
     message: "Choose an audio device.",
-    options,
+    options: devices,
   });
 
   if (isCancel(selected)) {
@@ -188,7 +173,7 @@ async function main() {
 
   const selectedDevice = requestedDevice ?? (await promptForAudioDevice());
 
-  if (selectedDevice === null) {
+  if (!selectedDevice) {
     reader.close();
 
     if (useInteractivePrompt) {
@@ -216,11 +201,11 @@ async function main() {
     .subscribe();
 
   if (useInteractivePrompt) {
-    outro(selectedDevice ? `Using audio device ${selectedDevice} with looping` : "Using automatic audio device selection with looping");
+    outro(`Using audio device ${selectedDevice} with looping`);
     return;
   }
 
-  console.log(selectedDevice ? `Using audio device ${selectedDevice} with looping` : "Using automatic audio device selection with looping");
+  console.log(`Using audio device ${selectedDevice} with looping`);
 }
 
 main().catch((error) => {
