@@ -48,7 +48,10 @@ const PICC_HALT = 0x50;
 // NTAG213 layout
 const NTAG213_USER_PAGE_START = 0x04;
 const NTAG213_USER_PAGE_END = 0x27;
-const NTAG213_USER_BYTES = (NTAG213_USER_PAGE_END - NTAG213_USER_PAGE_START + 1) * 4;
+const NTAG213_TEXT_PAGE_START = 0x04;
+const NTAG213_TEXT_PAGE_COUNT = 8;
+const NTAG213_TEXT_PAGE_END = NTAG213_TEXT_PAGE_START + NTAG213_TEXT_PAGE_COUNT - 1;
+const NTAG213_TEXT_BYTES = NTAG213_TEXT_PAGE_COUNT * 4;
 
 const NTAG_READ_RESPONSE_LENGTH = 16;
 const NTAG_ACK = 0x0a;
@@ -414,26 +417,20 @@ function writePageCloneFriendly(dev, page, bytes, maxAttempts = MAX_PAGE_WRITE_A
   throw lastError;
 }
 
-function encodeNdefText(text) {
-  const lang = Buffer.from("en", "ascii");
+function encodeTextPayload(text) {
   const textBytes = Buffer.from(text, "utf8");
-  const statusByte = lang.length & 0x3f;
 
-  const payload = Buffer.concat([Buffer.from([statusByte]), lang, textBytes]);
-
-  if (payload.length > 0xff) {
-    throw new Error("Text payload too long for short NDEF record");
+  if (textBytes.length > NTAG213_TEXT_BYTES) {
+    throw new Error(
+      `Text payload is ${textBytes.length} bytes, exceeding ${NTAG213_TEXT_BYTES} bytes across pages 0x${NTAG213_TEXT_PAGE_START.toString(
+        16
+      )}..0x${NTAG213_TEXT_PAGE_END.toString(16)}`
+    );
   }
 
-  const record = Buffer.from([0xd1, 0x01, payload.length, 0x54, ...payload]);
-
-  const ndefLength = record.length;
-
-  if (ndefLength > 0xfe) {
-    throw new Error("NDEF message too long for 1-byte TLV length");
-  }
-
-  return Buffer.concat([Buffer.from([0x03, ndefLength]), record, Buffer.from([0xfe])]);
+  const payload = Buffer.alloc(NTAG213_TEXT_BYTES, 0x00);
+  textBytes.copy(payload);
+  return payload;
 }
 
 function chunkIntoPages(buf) {
@@ -459,17 +456,16 @@ if (typeof text !== "string" || text.length === 0) {
   process.exit(1);
 }
 
-const ndefBytes = encodeNdefText(text);
+const textBytes = encodeTextPayload(text);
+const pages = chunkIntoPages(textBytes);
 
-if (ndefBytes.length > NTAG213_USER_BYTES) {
-  console.error(`Encoded NDEF message is ${ndefBytes.length} bytes, exceeding NTAG213 ` + `${NTAG213_USER_BYTES}-byte user memory.`);
-  process.exit(1);
-}
-
-const pages = chunkIntoPages(ndefBytes);
-
-console.log(`Encoded NDEF (${ndefBytes.length} bytes): ${hex([...ndefBytes])}`);
-console.log(`Will write ${pages.length} page(s) starting at page 0x${NTAG213_USER_PAGE_START.toString(16).padStart(2, "0")}.`);
+console.log(`Encoded text (${Buffer.from(text, "utf8").length} bytes, padded to ${textBytes.length}): ${hex([...textBytes])}`);
+console.log(
+  `Will write ${pages.length} page(s) across pages 0x${NTAG213_TEXT_PAGE_START.toString(16).padStart(2, "0")}..0x${NTAG213_TEXT_PAGE_END.toString(16).padStart(
+    2,
+    "0"
+  )}.`
+);
 
 const dev = SPI.openSync(SPI_BUS, SPI_DEVICE, {
   mode: SPI.MODE0,
@@ -505,10 +501,10 @@ try {
   let lastCard = null;
 
   for (let i = 0; i < pages.length; i++) {
-    const pageAddr = NTAG213_USER_PAGE_START + i;
+    const pageAddr = NTAG213_TEXT_PAGE_START + i;
 
-    if (pageAddr > NTAG213_USER_PAGE_END) {
-      throw new Error(`Refusing to write past user memory at page 0x${pageAddr.toString(16)}`);
+    if (pageAddr > NTAG213_TEXT_PAGE_END) {
+      throw new Error(`Refusing to write past text area at page 0x${pageAddr.toString(16)}`);
     }
 
     lastCard = writePageCloneFriendly(dev, pageAddr, pages[i]);
@@ -518,8 +514,13 @@ try {
   selectTag(dev);
   sleepMs(20);
 
-  const verify = readPageRaw(dev, NTAG213_USER_PAGE_START);
-  console.log(`Verify page 0x${NTAG213_USER_PAGE_START.toString(16)}: ${hex(verify)}`);
+  const verify = [];
+
+  for (let pageAddr = NTAG213_TEXT_PAGE_START; pageAddr <= NTAG213_TEXT_PAGE_END; pageAddr++) {
+    verify.push(...readPageRaw(dev, pageAddr));
+  }
+
+  console.log(`Verify pages 0x${NTAG213_TEXT_PAGE_START.toString(16)}..0x${NTAG213_TEXT_PAGE_END.toString(16)}: ${hex(verify)}`);
 
   if (lastCard) {
     try {
