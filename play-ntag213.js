@@ -188,7 +188,7 @@ async function main() {
 
   const selectedDevice = requestedDevice ?? (await promptForAudioDevice());
 
-  if (!selectedDevice) {
+  if (selectedDevice === null) {
     reader.close();
 
     if (useInteractivePrompt) {
