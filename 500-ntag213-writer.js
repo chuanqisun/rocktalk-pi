@@ -65,7 +65,7 @@ const VERIFY_TIMEOUT_MS = 80;
 const WRITE_ACK_TIMEOUT_MS = 20;
 const WRITE_RECOVERY_RESELECT_ATTEMPTS = 3;
 const READ_CHUNK_PAGE_COUNT = 4;
-const DEBUG = process.env.NTAG_DEBUG === "1";
+const DEBUG = true;
 
 // SPI address format:
 // write: ((reg << 1) & 0x7E)
