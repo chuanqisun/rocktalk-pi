@@ -74,6 +74,10 @@ function parseCliAudioDevice(argv) {
       throw new Error("Missing value for -a. Expected an ALSA device such as plughw:2,0.");
     }
 
+    if (value.toLowerCase() === "auto") {
+      return "";
+    }
+
     return value;
   }
 
@@ -82,10 +86,18 @@ function parseCliAudioDevice(argv) {
 
 async function promptForAudioDevice() {
   const devices = await getAudioDevices();
+  const options = [
+    {
+      value: "",
+      label: "Auto",
+      hint: "Use the audio player's fallback device stack",
+    },
+    ...devices,
+  ];
 
   const selected = await select({
     message: "Choose an audio device.",
-    options: devices,
+    options,
   });
 
   if (isCancel(selected)) {
@@ -204,11 +216,11 @@ async function main() {
     .subscribe();
 
   if (useInteractivePrompt) {
-    outro(`Using audio device ${selectedDevice} with looping`);
+    outro(selectedDevice ? `Using audio device ${selectedDevice} with looping` : "Using automatic audio device selection with looping");
     return;
   }
 
-  console.log(`Using audio device ${selectedDevice} with looping`);
+  console.log(selectedDevice ? `Using audio device ${selectedDevice} with looping` : "Using automatic audio device selection with looping");
 }
 
 main().catch((error) => {
