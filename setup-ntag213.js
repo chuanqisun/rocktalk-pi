@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { BehaviorSubject, debounceTime, filter, from, map, merge, share, tap, withLatestFrom } from "rxjs";
-import Rc522 from "./lib/rc522-ntag213.js";
+import Rc522 from "./lib/rc522.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TRACKS_DIR = resolve(__dirname, "tracks");
@@ -21,7 +21,7 @@ const CANCELLED = Symbol("cancelled");
 const BACK_TO_MENU = Symbol("back-to-menu");
 
 function isTimeoutError(error) {
-  return error instanceof Error && error.message === "Timed out waiting for RFID tag";
+  return error instanceof Error && error.message.startsWith("Timed out waiting for RFID tag");
 }
 
 function formatData(value) {
@@ -194,6 +194,9 @@ async function runAssignFlow() {
     if (selected === CANCELLED || selected === BACK_TO_MENU) {
       return;
     }
+
+    // clear data first
+    await programCard("");
 
     await programCard(selected);
   }
