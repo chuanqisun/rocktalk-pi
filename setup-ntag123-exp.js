@@ -8,9 +8,15 @@ import Rc522 from "./lib/rc522.js";
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const TRACKS_DIR = resolve(__dirname, "tracks");
-const TEXT_BLOCKS = [8, 9, 10];
+
+// Rock assignments are limited to 32 UTF-8 bytes across pages 4..11.
+const TEXT_START_PAGE = 4;
+const TEXT_PAGE_COUNT = 8;
+const TEXT_PAGES = Array.from({ length: TEXT_PAGE_COUNT }, (_, index) => TEXT_START_PAGE + index);
+const TEXT_CAPACITY_BYTES = TEXT_PAGE_COUNT * 4;
+
 const SCAN_TIMEOUT_MS = 250;
-const reader = new Rc522({ pollIntervalMs: 80 });
+const reader = new Rc522({ blocks: TEXT_PAGES, pollIntervalMs: 80 });
 const CANCELLED = Symbol("cancelled");
 const BACK_TO_MENU = Symbol("back-to-menu");
 
@@ -20,6 +26,10 @@ function isTimeoutError(error) {
 
 function formatData(value) {
   return value === "" ? "(empty string)" : value;
+}
+
+function getTextSizeBytes(value) {
+  return Buffer.byteLength(value, "utf8");
 }
 
 function cancelStep() {
@@ -48,7 +58,7 @@ async function listTracks() {
 async function* infiniteReadText(signal) {
   while (!signal.aborted) {
     try {
-      yield reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs: SCAN_TIMEOUT_MS });
+      yield reader.readTextAsync({ blocks: TEXT_PAGES, timeoutMs: SCAN_TIMEOUT_MS });
     } catch (error) {
       if (signal.aborted) {
         return;
@@ -144,9 +154,15 @@ async function waitForCardAction(message, action) {
 
 async function programCard(text) {
   try {
+    const textSizeBytes = getTextSizeBytes(text);
+
+    if (textSizeBytes > TEXT_CAPACITY_BYTES) {
+      throw new Error(`Track data is ${textSizeBytes} bytes, which exceeds the ${TEXT_CAPACITY_BYTES}-byte NTAG213 limit.`);
+    }
+
     const written = await waitForCardAction(`Tap and hold a rock to write ${formatData(text)}.`, async ({ timeoutMs }) => {
-      const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_BLOCKS, timeoutMs });
-      const readResult = await reader.readTextAsync({ blocks: TEXT_BLOCKS, timeoutMs });
+      const writeResult = await reader.writeTextAsync(text, { blocks: TEXT_PAGES, timeoutMs });
+      const readResult = await reader.readTextAsync({ blocks: TEXT_PAGES, timeoutMs });
 
       if (readResult.uid !== writeResult.uid || readResult.text !== text) {
         throw new Error(`Validation failed. Expected ${writeResult.uid} -> ${formatData(text)}, received ${readResult.uid} -> ${formatData(readResult.text)}.`);

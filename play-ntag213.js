@@ -12,10 +12,10 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const execFileAsync = promisify(execFile);
 const READER_POLL_INTERVAL_MS = 80;
 
-// NTAG213 user memory pages are 4..39. We mirror setup.js: 12 contiguous user
-// pages starting at page 4 = 48 bytes of text capacity.
+// NTAG213 user memory pages are 4..39. Keep playback aligned with the writer:
+// pages 4..11 = 32 bytes of UTF-8 text capacity.
 const TEXT_START_PAGE = 4;
-const TEXT_PAGE_COUNT = 12;
+const TEXT_PAGE_COUNT = 8;
 const TEXT_PAGES = Array.from({ length: TEXT_PAGE_COUNT }, (_, index) => TEXT_START_PAGE + index);
 
 const reader = new Rc522({

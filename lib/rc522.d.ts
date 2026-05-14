@@ -2,6 +2,7 @@ export interface Rc522Options {
   bus?: number;
   device?: number;
   speedHz?: number;
+  blocks?: number[];
   pollIntervalMs?: number;
 }
 
