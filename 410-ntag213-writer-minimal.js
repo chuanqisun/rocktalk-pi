@@ -3,7 +3,7 @@ import SPI from "spi-device";
 
 const SPI_BUS = 0;
 const SPI_DEVICE = 0;
-const SPEED_HZ = 1_000_000;
+const SPEED_HZ = 500_000;
 const CRC_A_BYTE_LENGTH = 2;
 
 // MFRC522 registers
@@ -49,10 +49,11 @@ const PICC_HALT = 0x50;
 const NTAG213_USER_PAGE_START = 0x04;
 const NTAG213_USER_PAGE_END = 0x27;
 const NTAG213_USER_BYTES = (NTAG213_USER_PAGE_END - NTAG213_USER_PAGE_START + 1) * 4;
-const NTAG_READ_RESPONSE_LENGTH = 16;
 
-// NTAG ACK / NAK
+const NTAG_READ_RESPONSE_LENGTH = 16;
 const NTAG_ACK = 0x0a;
+
+const MAX_PAGE_WRITE_ATTEMPTS = 20;
 
 function writeReg(dev, reg, val) {
   const tx = Buffer.from([(reg << 1) & 0x7e, val]);
@@ -106,6 +107,24 @@ function antennaOn(dev) {
   if ((v & 0x03) !== 0x03) {
     setBitMask(dev, TxControlReg, 0x03);
   }
+}
+
+function antennaOff(dev) {
+  clearBitMask(dev, TxControlReg, 0x03);
+}
+
+function rfFieldReset(dev, ms = 80) {
+  try {
+    antennaOff(dev);
+  } catch (_) {}
+
+  sleepMs(ms);
+
+  try {
+    antennaOn(dev);
+  } catch (_) {}
+
+  sleepMs(ms);
 }
 
 function init(dev) {
@@ -247,7 +266,7 @@ function anticollision(dev, cascadeCmd) {
 function selectCascade(dev, cascadeCmd, fiveBytes) {
   const frame = [cascadeCmd, 0x70, ...fiveBytes];
   const crc = calculateCRC(dev, frame);
-  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 25);
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 40);
 
   if (res.bits !== 0x18 || res.data.length < 1) {
     throw new Error(`SELECT failed on cascade 0x${cascadeCmd.toString(16)} (${res.bits} bits)`);
@@ -263,7 +282,7 @@ function haltA(dev) {
   try {
     transceive(dev, [...frame, crc[0], crc[1]], 0x00, 10);
   } catch (_) {
-    // HALT usually returns no data.
+    // HALT normally returns no data.
   }
 }
 
@@ -283,10 +302,31 @@ function selectTag(dev) {
     const sak2 = selectCascade(dev, PICC_SELECT_CL2, cl2);
     const uid3to6 = cl2.slice(0, 4);
 
-    return { atqa, uid: uid0to2.concat(uid3to6), sak: sak2 };
+    return {
+      atqa,
+      uid: uid0to2.concat(uid3to6),
+      sak: sak2,
+    };
   }
 
-  return { atqa, uid: cl1.slice(0, 4), sak: sak1 };
+  return {
+    atqa,
+    uid: cl1.slice(0, 4),
+    sak: sak1,
+  };
+}
+
+function readPageRaw(dev, page) {
+  const frame = [PICC_READ, page];
+  const crc = calculateCRC(dev, frame);
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 60);
+  const expectedLengths = new Set([NTAG_READ_RESPONSE_LENGTH, NTAG_READ_RESPONSE_LENGTH + CRC_A_BYTE_LENGTH]);
+
+  if (!expectedLengths.has(res.data.length)) {
+    throw new Error(`READ ${page} returned ${res.data.length} bytes`);
+  }
+
+  return res.data.slice(0, 4);
 }
 
 function writePageRaw(dev, page, fourBytes) {
@@ -296,9 +336,7 @@ function writePageRaw(dev, page, fourBytes) {
 
   const frame = [PICC_WRITE, page, ...fourBytes];
   const crc = calculateCRC(dev, frame);
-
-  // Increased timeout for clone/marginal NTAGs and EEPROM programming latency.
-  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 100);
+  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 150);
 
   if (res.bits !== 4 || res.data.length < 1) {
     throw new Error(`WRITE page ${page} returned unexpected frame (${res.bits} bits, ${res.data.length} bytes)`);
@@ -306,41 +344,74 @@ function writePageRaw(dev, page, fourBytes) {
 
   const ack = res.data[0] & 0x0f;
   if (ack !== NTAG_ACK) {
-    throw new Error(`WRITE page ${page} NAK 0x${ack.toString(16)}; tag rejected write`);
+    throw new Error(`WRITE page ${page} NAK 0x${ack.toString(16)}`);
   }
 }
 
-function writePageWithRetry(dev, page, bytes, retries = 3) {
-  let lastErr;
+function samePage(a, b) {
+  return a.length === 4 && b.length === 4 && a[0] === b[0] && a[1] === b[1] && a[2] === b[2] && a[3] === b[3];
+}
 
-  for (let attempt = 1; attempt <= retries + 1; attempt++) {
+function writePageCloneFriendly(dev, page, bytes, maxAttempts = MAX_PAGE_WRITE_ATTEMPTS) {
+  let lastError;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
     try {
+      // For clone tags, start every attempt from a clean RF/power state.
+      rfFieldReset(dev, attempt === 1 ? 30 : 100);
+
+      const card = selectTag(dev);
+
+      if (attempt === 1) {
+        console.log(`ATQA: ${hex(card.atqa)}`);
+        console.log(`SAK : 0x${card.sak.toString(16).padStart(2, "0")}`);
+        console.log(`UID : ${hex(card.uid)}`);
+
+        if (card.uid[0] !== 0x04) {
+          console.log(
+            `Info: UID does not start with 0x04 NXP manufacturer byte; got ` +
+              `0x${card.uid[0].toString(16).padStart(2, "0")}. Treating as NTAG-compatible clone.`
+          );
+        }
+      }
+
+      // Let marginal clone chips settle after SELECT before EEPROM operations.
+      sleepMs(25);
+
+      // Stability probe: if READ is not stable, WRITE is unlikely to work.
+      readPageRaw(dev, page);
+      sleepMs(15);
+      readPageRaw(dev, page);
+      sleepMs(15);
+
       writePageRaw(dev, page, bytes);
-      return;
+
+      // EEPROM programming guard time before verify / next command.
+      sleepMs(35);
+
+      const verify = readPageRaw(dev, page);
+      if (!samePage(verify, bytes)) {
+        throw new Error(`verify mismatch on page 0x${page.toString(16)}: got ${hex(verify)}, expected ${hex(bytes)}`);
+      }
+
+      console.log(`  wrote page 0x${page.toString(16).padStart(2, "0")} attempt ${attempt}: ${hex(bytes)}`);
+
+      return card;
     } catch (error) {
-      lastErr = error;
+      lastError = error;
+
       console.log(`  write page 0x${page.toString(16).padStart(2, "0")} attempt ${attempt} failed: ${error.message}`);
 
-      if (attempt <= retries) {
-        sleepMs(10);
-      }
+      try {
+        haltA(dev);
+      } catch (_) {}
+
+      rfFieldReset(dev, 100);
+      sleepMs(120);
     }
   }
 
-  throw lastErr;
-}
-
-function readPageRaw(dev, page) {
-  const frame = [PICC_READ, page];
-  const crc = calculateCRC(dev, frame);
-  const res = transceive(dev, [...frame, crc[0], crc[1]], 0x00, 30);
-  const expected = new Set([NTAG_READ_RESPONSE_LENGTH, NTAG_READ_RESPONSE_LENGTH + CRC_A_BYTE_LENGTH]);
-
-  if (!expected.has(res.data.length)) {
-    throw new Error(`READ ${page} returned ${res.data.length} bytes`);
-  }
-
-  return res.data.slice(0, 4);
+  throw lastError;
 }
 
 function encodeNdefText(text) {
@@ -357,6 +428,7 @@ function encodeNdefText(text) {
   const record = Buffer.from([0xd1, 0x01, payload.length, 0x54, ...payload]);
 
   const ndefLength = record.length;
+
   if (ndefLength > 0xfe) {
     throw new Error("NDEF message too long for 1-byte TLV length");
   }
@@ -390,7 +462,7 @@ if (typeof text !== "string" || text.length === 0) {
 const ndefBytes = encodeNdefText(text);
 
 if (ndefBytes.length > NTAG213_USER_BYTES) {
-  console.error(`Encoded NDEF message is ${ndefBytes.length} bytes, exceeds NTAG213 user memory of ${NTAG213_USER_BYTES} bytes.`);
+  console.error(`Encoded NDEF message is ${ndefBytes.length} bytes, exceeding NTAG213 ` + `${NTAG213_USER_BYTES}-byte user memory.`);
   process.exit(1);
 }
 
@@ -416,52 +488,50 @@ try {
 
   console.log("Place NTAG213 near the reader...");
 
+  // Wait until the tag can be selected once. This avoids printing page-write
+  // retry logs while no card is present.
   while (true) {
     try {
-      const card = selectTag(dev);
-
-      console.log(`ATQA: ${hex(card.atqa)}`);
-      console.log(`SAK : 0x${card.sak.toString(16).padStart(2, "0")}`);
-      console.log(`UID : ${hex(card.uid)}`);
-
-      if (card.uid[0] !== 0x04) {
-        console.warn(
-          `Warning: UID does not start with 0x04 NXP manufacturer byte; got 0x${card.uid[0]
-            .toString(16)
-            .padStart(2, "0")}. This may be a clone tag or marginal anticollision read.`
-        );
-      }
-
-      // Let the tag/RF field settle after SELECT before EEPROM writes.
-      sleepMs(5);
-
-      for (let i = 0; i < pages.length; i++) {
-        const pageAddr = NTAG213_USER_PAGE_START + i;
-
-        if (pageAddr > NTAG213_USER_PAGE_END) {
-          throw new Error(`Refusing to write past NTAG213 user memory at page 0x${pageAddr.toString(16)}`);
-        }
-
-        writePageWithRetry(dev, pageAddr, pages[i], 3);
-
-        console.log(`  wrote page 0x${pageAddr.toString(16).padStart(2, "0")}: ${hex(pages[i])}`);
-
-        // Give EEPROM programming time before the next page write.
-        sleepMs(10);
-      }
-
-      const verify = readPageRaw(dev, NTAG213_USER_PAGE_START);
-      console.log(`Verify page 0x${NTAG213_USER_PAGE_START.toString(16)}: ${hex(verify)}`);
-
-      console.log("Write completed successfully.");
-      haltA(dev);
+      rfFieldReset(dev, 50);
+      selectTag(dev);
       break;
     } catch (error) {
-      // Always log attempts; do not suppress repeated timeout messages.
       console.log(`Attempt failed: ${error.message}`);
+      rfFieldReset(dev, 80);
       sleepMs(150);
     }
   }
+
+  let lastCard = null;
+
+  for (let i = 0; i < pages.length; i++) {
+    const pageAddr = NTAG213_USER_PAGE_START + i;
+
+    if (pageAddr > NTAG213_USER_PAGE_END) {
+      throw new Error(`Refusing to write past user memory at page 0x${pageAddr.toString(16)}`);
+    }
+
+    lastCard = writePageCloneFriendly(dev, pageAddr, pages[i]);
+  }
+
+  rfFieldReset(dev, 50);
+  selectTag(dev);
+  sleepMs(20);
+
+  const verify = readPageRaw(dev, NTAG213_USER_PAGE_START);
+  console.log(`Verify page 0x${NTAG213_USER_PAGE_START.toString(16)}: ${hex(verify)}`);
+
+  if (lastCard) {
+    try {
+      haltA(dev);
+    } catch (_) {}
+  }
+
+  console.log("Write completed successfully.");
 } finally {
+  try {
+    antennaOff(dev);
+  } catch (_) {}
+
   dev.closeSync();
 }
